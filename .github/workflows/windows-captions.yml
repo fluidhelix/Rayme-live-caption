@@ -81,6 +81,9 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci --no-audit --no-fund
+      - name: PowerShell to CMake argument regression
+        shell: pwsh
+        run: ./test/audio/cmake-arguments.test.ps1
       - name: Prepare pinned CPU Whisper and CI-only tiny.en (required)
         shell: pwsh
         run: ./test/audio/prepare-whisper.ps1

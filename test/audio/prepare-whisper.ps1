@@ -14,9 +14,26 @@ Fetch-Verified $assets.modelUrl "$root/ggml-tiny.en.bin" SHA1 $assets.modelSha1
 Fetch-Verified $assets.sourceUrl "$root/whisper-source.tar.gz" SHA256 $assets.sourceSha256
 $source = "$root/whisper.cpp-$($assets.whisperCommit)"
 if (!(Test-Path $source)) { tar -xzf "$root/whisper-source.tar.gz" -C $root; if ($LASTEXITCODE -ne 0) { throw 'Source extraction failed' } }
-cmake -S $source -B "$root/build" -DCMAKE_BUILD_TYPE=Release -DCMAKE_POLICY_VERSION_MINIMUM=3.10 -DGGML_NATIVE=OFF -DGGML_CUDA=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_CURL=OFF
+# String literals avoid PowerShell parsing a dotted -D value as separate tokens.
+$configureArguments = @(
+    '-S', $source
+    '-B', "$root/build"
+    '-DCMAKE_BUILD_TYPE=Release'
+    '-DCMAKE_POLICY_VERSION_MINIMUM=3.10'
+    '-DGGML_NATIVE=OFF'
+    '-DGGML_CUDA=OFF'
+    '-DWHISPER_BUILD_TESTS=OFF'
+    '-DWHISPER_CURL=OFF'
+)
+& cmake @configureArguments
 if ($LASTEXITCODE -ne 0) { throw 'Whisper configure failed' }
-cmake --build "$root/build" --config Release --target whisper-server --parallel 2
+$buildArguments = @(
+    '--build', "$root/build"
+    '--config', 'Release'
+    '--target', 'whisper-server'
+    '--parallel', '2'
+)
+& cmake @buildArguments
 if ($LASTEXITCODE -ne 0) { throw 'Whisper build failed' }
 $server = Get-ChildItem "$root/build/bin" -Recurse -Filter whisper-server.exe | Select-Object -First 1
 if (!$server) { throw 'No Windows whisper-server build output' }

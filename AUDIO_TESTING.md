@@ -77,3 +77,13 @@ node test/audio/speech-e2e.js artifacts/ci-whisper/runtime.json artifacts/audio-
 - Windows real rendering/process isolation and Windows CI run status: **not verified here**. GitHub API access also returns Forbidden; the pushed branch triggers the existing workflow, but no successful new run/artifact is claimed from this workspace. Windows checks must be read from the run diagnostics.
 
 Changed files: the existing workflow; new `native/AudioIntegrationProbe/{AudioIntegrationProbe.csproj,Program.cs}`; new `test/audio/{assets.json,FIXTURE_LICENSE.md,prepare-whisper.ps1,common.js,speech-e2e.js,windows-probe.js,ensure-result.js,run-windows.ps1}`; new `test/audio-integration.test.js`; this report. Production application files are unchanged. No claim of actual game, GPU or Vanguard compatibility follows from these tests.
+
+## CMake argument-passing correction after `4d5fe48`
+
+The user reported both `4d5fe48` runs passed `build-test` (including actual process activation) and correctly marked rendering INCONCLUSIVE with zero render endpoints, but failed `speech-integration` while configuring CMake. The unquoted PowerShell token `-DCMAKE_POLICY_VERSION_MINIMUM=3.10` became policy value `3` plus an extra `.10` path.
+
+The preparation script now splats arrays of explicit string arguments for **both** configure and build. The literal policy argument remains exactly `-DCMAKE_POLICY_VERSION_MINIMUM=3.10`. Source/model/fixture pins, checksums, exit-code checks and every real-inference assertion are unchanged; no production files were edited.
+
+Added `test/audio/cmake-arguments.test.ps1` before preparation in the speech job. It evaluates the real script's argument arrays, checks that the CMake calls consume them, and runs native CMake configure/build against a minimal project with paths containing spaces. It asserts the exact native cache value in all three PowerShell native argument modes. Optional `-WhisperSource <directory>` also configures the actual pinned source; it does not download a substitute model or bypass validation.
+
+Executed on Linux: PowerShell **7.5.4** with CMake **3.31.10** and **4.2.0**, all three mode round-trips passed; actual pinned Whisper configuration passed with both CMake versions; **24 Node tests passed**; `git diff --check` passed. The minimal target builds validate argument transport, not speech recognition. Full real-inference execution is still blocked locally by the model-host CONNECT 403. GitHub API queries still return Forbidden, so the new Windows rerun cannot be independently inspected from this workspace. The prior Windows results above are user-reported, not newly verified here. PR #1 remains unmerged.
