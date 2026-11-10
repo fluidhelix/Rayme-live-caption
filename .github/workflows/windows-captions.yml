@@ -9,6 +9,7 @@ permissions:
 jobs:
   build-test:
     runs-on: windows-latest
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -16,11 +17,12 @@ jobs:
           node-version: '22'
           cache: npm
       - run: npm ci --no-audit --no-fund
-      - run: npm test
+      - name: Mock/local-protocol tests (not real audio capture)
+        run: npm test
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
-      - name: Synthetic format conversion tests
+      - name: Native conversion and policy tests (no audio endpoint required)
         run: dotnet run --project native/LoopbackCapture.Tests -c Release
       - uses: actions/setup-python@v5
         with:
@@ -47,4 +49,49 @@ jobs:
         with:
           name: windows-loopback-win-x64
           path: artifacts/windows-loopback/
+          if-no-files-found: error
+      - name: Publish controlled test-only audio producer
+        run: dotnet publish native/AudioIntegrationProbe -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o artifacts/audio-test-tools
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-audio-test-tools
+          path: artifacts/audio-test-tools/
+          if-no-files-found: error
+      - name: Fetch/checksum public-domain speech fixture (no model)
+        shell: pwsh
+        run: ./test/audio/prepare-whisper.ps1 -OutputDirectory artifacts/audio-inputs -FixtureOnly
+      - name: Real Windows rendering and process-loopback isolation probe
+        run: node test/audio/windows-probe.js artifacts/windows-loopback/LoopbackCapture.exe artifacts/audio-test-tools/AudioIntegrationProbe.exe artifacts/audio-inputs/jfk.wav artifacts/audio-diagnostics/windows.json
+      - name: Ensure real-audio result is present even after setup failure
+        if: always()
+        run: node test/audio/ensure-result.js artifacts/audio-diagnostics/windows.json "Windows rendering/process-loopback probe"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-audio-diagnostics
+          path: artifacts/audio-diagnostics/
+          if-no-files-found: error
+  speech-integration:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Prepare pinned CPU Whisper and CI-only tiny.en (required)
+        shell: pwsh
+        run: ./test/audio/prepare-whisper.ps1
+      - name: Real speech end-to-end through production modules (no WASAPI needed)
+        run: node test/audio/speech-e2e.js artifacts/ci-whisper/runtime.json artifacts/audio-diagnostics/speech.json
+      - name: Ensure speech result is present even after setup failure
+        if: always()
+        run: node test/audio/ensure-result.js artifacts/audio-diagnostics/speech.json "Real Whisper speech pipeline"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: speech-integration-diagnostics
+          path: artifacts/audio-diagnostics/
           if-no-files-found: error
