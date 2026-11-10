@@ -81,11 +81,11 @@ class SourceManager {
       this.scheduler.remove(entry.source.id);
       entry.source = Object.freeze({ ...entry.source, generation: ++this.generation });
       entry.segmenter = new Segmenter({ threshold: this.threshold });
-      // PCM byte offset + capture-worker activation time gives approximate capture order.
+      // PCM sample offset + first-block arrival anchor gives approximate capture order.
       // Raw PCM pipe has no WASAPI QPC header; never claim sample-accurate cross-app timing.
-      const anchor = this.now();
-      entry.segmenter.on('segment', job => this.scheduler.add(entry.source, { ...job, capturedAt: anchor + job.captureOffsetMs }));
-      entry.push = pcm => entry.segmenter.push(pcm);
+      entry.anchor = null;
+      entry.segmenter.on('segment', job => this.scheduler.add(entry.source, { ...job, capturedAt: entry.anchor + job.captureOffsetMs }));
+      entry.push = pcm => { if (entry.anchor === null) entry.anchor = this.now() - pcm.length / 32; entry.segmenter.push(pcm); };
       this.scheduler.attach(entry.source); this.publish({ type: 'reset', source: entry.source });
     };
     entry.capture = this.createCapture(pcm => { if (!this.paused && this.slots.get(entry.source.id) === entry) entry.push?.(pcm); },
