@@ -4,25 +4,44 @@
 <style>
 :root{color-scheme:dark;--fs:24px}*{box-sizing:border-box}body{margin:0;background:#313338;color:#f2f3f5;font-family:'Segoe UI',sans-serif}header{position:sticky;top:0;background:#1e1f22;padding:12px;border-bottom:1px solid #5865f2}label,button,select{font:inherit}select{max-width:50vw}button,select{background:#2b2d31;color:#f2f3f5;border:1px solid #80848e;border-radius:4px;padding:5px}#status{margin-bottom:10px;color:#ffdf80}main{padding:12px;font-size:var(--fs);line-height:1.5}p{background:#2b2d31;padding:10px;margin:6px 0;overflow-wrap:anywhere}#partial{border-left:4px solid #5865f2;color:#dedfff}#empty{color:#b5bac1}input{vertical-align:middle}details{margin-top:8px}
 </style>
-<header><div id="status" role="status">Connecting…</div><label>Playback output <select id="devices"><option value="default">Windows default output</option></select></label> <button id="refresh">Refresh devices</button>
-<details><summary>Caption settings</summary><label>Text size <input id="font" type="range" min="16" max="48" value="24"></label> <button id="clear">Clear history</button><p>Move and resize this browser window normally. Only playback audio is captured. History stays in memory.</p></details></header>
-<main aria-label="Caption history"><div id="history"></div><p id="partial" hidden></p><p id="empty">Waiting for conversation…</p></main>
+<header><div id="status" role="status">Connecting…</div>
+<div id="controls"><div><label><input type="checkbox" id="enable-a"> Application A</label> <select id="app-a" aria-label="Application A"></select></div>
+<div><label><input type="checkbox" id="enable-b"> Application B</label> <select id="app-b" aria-label="Application B"></select></div>
+<div><label><input type="checkbox" id="enable-device"> Whole-device fallback</label> <select id="devices" aria-label="Playback output"></select></div></div>
+<button id="refresh">Refresh applications/devices</button> <button id="pause">Pause capture</button>
+<details><summary>Caption settings</summary><label>Text size <input id="font" type="range" min="16" max="48" value="24"></label> <button id="clear">Clear history everywhere</button><p>Enable up to two applications OR a playback device. Browser labels identify processes, not tabs. Nothing is recorded. Move/resize this window normally.</p></details></header>
+<main aria-label="Caption history"><div id="source-status" role="status"></div><div id="history"></div><div id="partials"></div><p id="partial" hidden></p><p id="empty">Waiting for conversation…</p></main>
 <script>
 const historyEl=document.getElementById('history'),partial=document.getElementById('partial'),statusEl=document.getElementById('status'),devices=document.getElementById('devices'),empty=document.getElementById('empty');
-let entries=[],socket,lastFinal=0,follow=true;
+let entries=[],partials={},sources={},apps=[],outputs=[],socket,paused=false,follow=true;
+const watermarks=new Map();
 window.addEventListener('scroll',()=>{follow=innerHeight+scrollY>=document.body.scrollHeight-80;});
-function render(){historyEl.replaceChildren(...entries.map(e=>{const p=document.createElement('p');p.textContent=e.text;return p;}));empty.hidden=entries.length>0||!partial.hidden;if(follow)window.scrollTo(0,document.body.scrollHeight);}
+function key(e){return (e.source?.id||'legacy')+':'+(e.source?.generation||0);}
+function row(e){const p=document.createElement('p');const label=document.createElement('strong');label.textContent=e.source?.name||'Playback output';p.append(label,document.createElement('br'),document.createTextNode(e.text));p.dataset.source=e.source?.id||'legacy';if(e.queueAgeMs!==undefined){const info=document.createElement('small');info.style.display='block';info.textContent='Inference '+e.inferenceMs+' ms · queue '+e.queueAgeMs+' ms';p.append(info);}return p;}
+function render(){const keep=new Set([...entries.map(key),...Object.values(partials).map(key)]);for(const k of watermarks.keys())if(!keep.has(k))watermarks.delete(k);historyEl.replaceChildren(...entries.map(row));document.getElementById('partials').replaceChildren(...Object.values(partials).filter(e=>e.text).map(e=>{const p=row(e);p.style.borderLeft='4px solid #5865f2';p.dataset.partial='true';return p;}));document.getElementById('source-status').replaceChildren(...Object.values(sources).map(e=>{const d=document.createElement('div');d.textContent=e.source.name+' — '+e.state+': '+e.message;return d;}));empty.hidden=entries.length>0||Object.values(partials).some(e=>e.text);if(follow)window.scrollTo(0,document.body.scrollHeight);}
+function send(e){if(socket?.readyState===1)socket.send(JSON.stringify(e));}
+function controls(supported){
+ for(const slot of ['a','b']){const select=document.getElementById('app-'+slot),current=sources[slot]?.source.identity,previous=select.value;select.replaceChildren(new Option('Select application',''),...apps.map(a=>new Option(a.name+' (PID '+a.pid+')',a.id)));if(current&&!apps.some(a=>a.id===current))select.add(new Option('Selected process unavailable — refresh/reselect',current));select.value=current||previous;const enable=document.getElementById('enable-'+slot);enable.checked=!!sources[slot];if(supported!==undefined){select.disabled=!supported;enable.disabled=!supported;}}
+ const previous=devices.value;devices.replaceChildren(new Option('Windows default output','default'),...outputs.map(d=>new Option(d.name,d.id)));devices.value=sources.device?.source.identity||previous||'default';document.getElementById('enable-device').checked=!!sources.device;document.getElementById('pause').textContent=paused?'Resume capture':'Pause capture';
+}
 function handle(e){
- if(e.type==='snapshot'){entries=e.history;lastFinal=entries.at(-1)?.id||0;partial.textContent=e.partial?.text||'';partial.hidden=!e.partial?.text;statusEl.textContent=e.status;handle({type:'devices',devices:e.devices,selected:e.selected});render();}
+ if(e.type==='snapshot'){entries=e.history;partials=e.partials||{};sources=e.sources||{};apps=e.apps||[];outputs=e.devices;paused=e.paused;statusEl.textContent=e.status;for(const item of entries)watermarks.set(key(item),Math.max(watermarks.get(key(item))||0,item.id));if(e.partial)partials.legacy=e.partial;controls(e.processSupported);render();return;}
  if(e.type==='status')statusEl.textContent=e.message;
- if(e.type==='devices'){devices.replaceChildren(new Option('Windows default output','default'),...e.devices.map(d=>new Option(d.name+(d.isDefault?' (default)':''),d.id)));devices.value=e.selected||'default';}
- if(e.type==='reset'){partial.hidden=true;render();}
+ if(e.type==='devices'){outputs=e.devices;controls();}
+ if(e.type==='applications'){apps=e.apps;controls(e.supported);if(!e.supported)statusEl.textContent='Application loopback unsupported on this OS. Use whole-device fallback.';}
+ if(e.type==='source-status'||e.type==='reset'){if(e.source){if(sources[e.source.id]?.source.generation>e.source.generation)return;sources[e.source.id]=e.type==='reset'?{source:e.source,state:'waiting',message:'Waiting for audio'}:e;if(e.type==='reset')delete partials[e.source.id];controls();render();}else{partials={};render();}}
+ if(e.type==='source-removed'){delete sources[e.source.id];delete partials[e.source.id];controls();render();}
+ if(e.type==='paused'){paused=e.paused;controls();}
+ if(e.type==='cleared'){entries=[];partials={};render();}
  if(e.type==='caption'){
-  if(e.final){if(e.id<=lastFinal)return;lastFinal=e.id;partial.hidden=true;if(e.text)entries.push(e);entries=entries.slice(-30);}
-  else {if(e.id<=lastFinal)return;partial.textContent=e.text;partial.hidden=!e.text;}
+  if(e.source&&sources[e.source.id]?.source.generation>e.source.generation)return;
+  const k=key(e),slot=e.source?.id||'legacy';
+  if(e.final){if(e.id<=(watermarks.get(k)||0))return;watermarks.set(k,e.id);delete partials[slot];if(e.text)entries.push(e);entries.sort((a,b)=>(a.capturedAt||0)-(b.capturedAt||0));entries=entries.slice(-30);}
+  else{if(e.id<=(watermarks.get(k)||0))return;partials[slot]=e;}
   render();
  }
 }
 function connect(){socket=new WebSocket(location.origin.replace('http:','ws:')+'/?token='+new URLSearchParams(location.search).get('token'));socket.onmessage=e=>{try{handle(JSON.parse(e.data));}catch{}};socket.onclose=()=>{statusEl.textContent='Connection lost. Reconnecting…';setTimeout(connect,1500);};socket.onerror=()=>socket.close();}
-devices.onchange=()=>{if(socket.readyState===1)socket.send(JSON.stringify({type:'select',id:devices.value}));};document.getElementById('refresh').onclick=()=>{if(socket.readyState===1)socket.send(JSON.stringify({type:'refresh'}));};document.getElementById('font').oninput=e=>document.documentElement.style.setProperty('--fs',e.target.value+'px');document.getElementById('clear').onclick=()=>{entries=[];partial.hidden=true;render();};connect();
+for(const slot of ['a','b','device']){const select=slot==='device'?devices:document.getElementById('app-'+slot),enable=document.getElementById('enable-'+slot);const configure=()=>{if(enable.checked&&!select.value){enable.checked=false;return;}send({type:'configure',slot,id:select.value,enabled:enable.checked});};enable.onchange=configure;select.onchange=()=>{if(enable.checked)configure();};}
+document.getElementById('refresh').onclick=()=>send({type:'refresh'});document.getElementById('pause').onclick=()=>send({type:'pause',paused:!paused});document.getElementById('font').oninput=e=>document.documentElement.style.setProperty('--fs',e.target.value+'px');document.getElementById('clear').onclick=()=>send({type:'clear'});connect();
 </script></html>

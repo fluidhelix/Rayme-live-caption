@@ -3,36 +3,41 @@ require('dotenv').config();
 const path = require('node:path');
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
-const { Segmenter, Scheduler } = require('./audio');
+const { SourceScheduler, SourceManager } = require('./sources');
 const { Whisper, resolveRuntime } = require('./whisper');
-const { Capture, listDevices } = require('./capture');
+const { listDevices, listApplications } = require('./capture');
 const { createUI } = require('./server');
 async function main() {
-  if (process.platform !== 'win32') throw new Error('Playback capture requires Windows 10/11. Run tests on other systems with npm test.');
+  if (process.platform !== 'win32') throw new Error('Playback capture requires Windows; application mode targets Windows 11 x64.');
   const helper = path.join(__dirname, '..', 'native', 'bin', 'LoopbackCapture.exe');
-  if (!fs.existsSync(helper)) throw new Error('Missing audio helper. Download windows-loopback-win-x64 from GitHub Actions and extract LoopbackCapture.exe into native\\bin. See WINDOWS-CAPTIONS.md.');
+  if (!fs.existsSync(helper)) throw new Error('Missing audio helper. Download windows-loopback-win-x64 from GitHub Actions into native\\bin. See WINDOWS-CAPTIONS.md.');
   const whisper = new Whisper(resolveRuntime());
-  let ui, capture, scheduler, stopped = false;
-  const shutdown = async () => { if (stopped) return; stopped = true; scheduler?.close(); await capture?.close(); await whisper.close(); await ui?.close(); };
+  let ui, manager, scheduler, stopped = false, controls = Promise.resolve();
+  // Serialize selection/pause commands; no competing worker creation during rapid UI changes.
+  const control = task => { controls = controls.catch(() => {}).then(() => { if (!stopped) return task(); }); return controls; };
+  const shutdown = async () => { if (stopped) return; stopped = true; await controls.catch(() => {}); scheduler?.close(); await manager?.close(); await whisper.close(); await ui?.close(); };
   const signal = () => shutdown().then(() => process.exit(0));
   process.once('SIGINT', signal); process.once('SIGTERM', signal);
   try {
     const threshold = Number(process.env.WINDOWS_SILENCE_RMS || 80);
     if (!Number.isFinite(threshold) || threshold < 0 || threshold > 32767) throw new Error('WINDOWS_SILENCE_RMS must be 0–32767.');
-    const segmenter = new Segmenter({ threshold });
-    let selected = process.env.WINDOWS_AUDIO_DEVICE || 'default';
-    const status = message => ui.publish({ type: 'status', message });
-    const refresh = async () => ui.publish({ type: 'devices', devices: await listDevices(helper), selected });
-    ui = await createUI({ port: Number(process.env.WINDOWS_CAPTION_PORT || 8090), onRefresh: refresh, onSelect: async id => { selected = id; await capture.select(id); await refresh(); } });
-    // Browser is an ordinary external window. No game integration or graphics hooks.
-    const browser = spawn('rundll32.exe', ['url.dll,FileProtocolHandler', ui.url], { windowsHide: true, stdio: 'ignore' }); browser.on('error', () => status('Could not open browser. Restart after setting a default Windows browser.'));
-    console.log('Windows captions window opened. Close this console or press Ctrl+C to stop.');
-    await whisper.start(status);
+    const refresh = async () => {
+      ui.publish({ type: 'devices', devices: await listDevices(helper), selected: 'default' });
+      try { const result = await listApplications(helper); ui.publish({ type: 'applications', ...result }); }
+      catch { ui.publish({ type: 'status', message: 'Application discovery unavailable. Whole-device capture remains available; install the Phase 2 helper.' }); }
+    };
+    ui = await createUI({ port: Number(process.env.WINDOWS_CAPTION_PORT || 8090), onRefresh: () => control(refresh),
+      onConfigure: (slot, descriptor) => control(async () => { if (!manager) throw Error('Wait for Whisper readiness'); await manager.configure(slot, descriptor); }),
+      onPause: paused => control(async () => { if (!manager) throw Error('Wait for Whisper readiness'); await manager.pause(paused); }) });
+    const browser = spawn('rundll32.exe', ['url.dll,FileProtocolHandler', ui.url], { windowsHide: true, stdio: 'ignore' });
+    browser.on('error', () => ui.publish({ type: 'status', message: 'Could not open the default Windows browser.' }));
+    console.log('Caption window opened. Ctrl+C stops all capture workers and Whisper.');
+    await whisper.start(message => ui.publish({ type: 'status', message }));
     if (stopped) return;
-    scheduler = new Scheduler((pcm, signal) => whisper.infer(pcm, signal), event => ui.publish(event), status);
-    segmenter.on('segment', job => scheduler.add(job));
-    capture = new Capture(helper, pcm => segmenter.push(pcm), status, () => { segmenter.reset(); scheduler.reset(); ui.publish({ type: 'reset' }); });
-    await refresh(); await capture.select(selected);
+    scheduler = new SourceScheduler((pcm, signal) => whisper.infer(pcm, signal), event => ui.publish(event), (source, state, message) => ui.publish({ type: 'source-status', source, state, message }));
+    manager = new SourceManager({ helper, scheduler, publish: event => ui.publish(event), threshold });
+    await refresh();
+    ui.publish({ type: 'status', message: 'Whisper ready. Enable up to two applications, or enable whole-device fallback. Nothing is captured until enabled.' });
   } catch (e) { await shutdown(); throw e; }
 }
 if (require.main === module) main().catch(e => { console.error(e.message); process.exitCode = 1; });

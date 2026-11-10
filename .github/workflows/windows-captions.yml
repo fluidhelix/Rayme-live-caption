@@ -19,9 +19,18 @@ jobs:
       - run: npm test
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '10.0.x'
       - name: Synthetic format conversion tests
         run: dotnet run --project native/LoopbackCapture.Tests -c Release
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Browser source isolation and controls
+        shell: pwsh
+        run: |
+          python -m pip install playwright==1.56.0
+          python -m playwright install chromium
+          python test/overlay-browser.py
       - name: Publish self-contained helper
         run: dotnet publish native/LoopbackCapture -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o artifacts/windows-loopback
       - name: Verify executable device enumeration (empty list is valid on CI)
@@ -30,6 +39,9 @@ jobs:
           $json = & ./artifacts/windows-loopback/LoopbackCapture.exe --list
           if ($LASTEXITCODE -ne 0) { throw 'Helper failed to enumerate playback devices' }
           $null = $json | ConvertFrom-Json
+          $apps = & ./artifacts/windows-loopback/LoopbackCapture.exe --apps
+          if ($LASTEXITCODE -ne 0) { throw 'Application discovery failed' }
+          $null = $apps | ConvertFrom-Json
           Get-FileHash ./artifacts/windows-loopback/LoopbackCapture.exe -Algorithm SHA256 | Format-List | Out-File artifacts/windows-loopback/SHA256.txt
       - uses: actions/upload-artifact@v4
         with:

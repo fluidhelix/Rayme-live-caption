@@ -44,7 +44,7 @@ class Whisper {
     // Refuse another process on the port; never mistake an unrelated server for our child.
     await new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', () => reject(new Error(`Port ${this.port} is busy. Close the other caption mode first.`))); s.listen(this.port, '127.0.0.1', () => s.close(resolve)); });
     const { exe, model } = this.runtime; const dir = path.dirname(exe);
-    const args = ['-m', model, '--host', '127.0.0.1', '--port', String(this.port), '-t', this.env.WHISPER_THREADS || '4', '-l', this.env.WHISPER_LANGUAGE || 'en', '-bs', '5', '-bo', '5'];
+    const args = ['-m', model, '--host', '127.0.0.1', '--port', String(this.port), '-t', this.env.WHISPER_THREADS || '4', '-l', this.env.WHISPER_LANGUAGE || 'en', '-bs', '5', '-bo', '5', '-nc'];
     if (this.env.WHISPER_GPU === 'false') args.push('-ng');
     if (this.env.FLASH_ATTN === 'true') args.push('-fa');
     this.child = spawn(exe, args, { cwd: dir, windowsHide: true, env: { ...process.env, ...this.env, PATH: dir + path.delimiter + process.env.PATH }, stdio: ['ignore', 'ignore', 'pipe'] });
@@ -56,7 +56,7 @@ class Whisper {
   }
   async infer(pcm, signal) {
     const body = new FormData(); body.set('file', new Blob([wav(pcm)], { type: 'audio/wav' }), 'audio.wav');
-    body.set('response_format', 'json'); body.set('temperature', '0.0'); body.set('language', this.env.WHISPER_LANGUAGE || 'en');
+    body.set('no_context', 'true'); body.set('response_format', 'json'); body.set('temperature', '0.0'); body.set('language', this.env.WHISPER_LANGUAGE || 'en');
     const data = await request(`${this.url}/inference`, { method: 'POST', body, signal });
     if (typeof data.text !== 'string') throw new Error('Missing transcription text');
     // Keep [laughter], *coughing*, etc. Only explicit no-audio markers are discarded.

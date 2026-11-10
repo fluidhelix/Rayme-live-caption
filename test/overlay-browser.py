@@ -1,45 +1,68 @@
-"""Optional developer UI integration: Python Playwright + installed Chromium required.
-Run from the repository root: python test/overlay-browser.py
-Uses synthetic captions only; never starts Whisper/Discord or captures audio.
-"""
-import json
+"""Synthetic two-source integration. Python Playwright; no capture/model/token needed."""
+import os
 import subprocess
 from pathlib import Path
 from playwright.sync_api import sync_playwright
-
 root = Path(__file__).resolve().parents[1]
 fixture = r"""
 const {createUI}=require('./windows-captions/server');
-(async()=>{const ui=await createUI({port:0,onSelect:async()=>{},onRefresh:async()=>{}});
-for(let id=1;id<=35;id++)ui.publish({type:'caption',id,text:'Synthetic sentence '+id,final:true});
-ui.publish({type:'caption',id:36,text:'*laughter*',final:false});console.log(ui.url);})();
+(async()=>{let ui;const sources={a:{id:'a',name:'Chrome',identity:'10:100',generation:1},b:{id:'b',name:'Discord',identity:'20:200',generation:2}};
+ui=await createUI({port:0,onRefresh:()=>{},onConfigure:(slot,d)=>ui.publish(d?{type:'source-status',source:sources[slot],state:'capturing',message:'Synthetic capture'}:{type:'source-removed',source:sources[slot]}),onPause:paused=>ui.publish({type:'paused',paused})});
+ui.publish({type:'applications',supported:true,apps:[{id:'10:100',pid:10,started:'100',name:'Chrome',kind:'process'},{id:'20:200',pid:20,started:'200',name:'Discord',kind:'process'}]});
+for(const source of Object.values(sources))ui.publish({type:'source-status',source,state:'capturing',message:'Synthetic capture'});
+for(let id=1;id<=35;id++)ui.publish({type:'caption',source:sources[id%2?'a':'b'],id,text:'Synthetic sentence '+id,final:true,capturedAt:id});
+for(const source of Object.values(sources))ui.publish({type:'caption',source,id:36,text:source.name+' *laughter*',final:false});
+console.log(ui.url);})();
 """
 child = subprocess.Popen(['node', '-e', fixture], cwd=root, stdout=subprocess.PIPE, text=True)
 try:
     url = child.stdout.readline().strip()
     with sync_playwright() as p:
-        import os
-        browser = p.chromium.launch(executable_path=os.environ.get('CHROMIUM_PATH', '/usr/bin/chromium'), headless=True)
+        args = {'headless': True}
+        executable = os.environ.get('CHROMIUM_PATH')
+        if executable:
+            args['executable_path'] = executable
+        elif Path('/usr/bin/chromium').exists():
+            args['executable_path'] = '/usr/bin/chromium'
+        browser = p.chromium.launch(**args)
         page = browser.new_page()
         errors = []
         page.on('pageerror', lambda e: errors.append(str(e)))
         page.goto(url)
-        page.locator('#partial').filter(has_text='*laughter*').wait_for()
+        page.locator('#partials p').filter(has_text='Chrome *laughter*').wait_for()
+        assert page.locator('#partials p').count() == 2
+        assert page.locator('#partials p[data-source="a"] strong').inner_text() == 'Chrome'
+        assert page.locator('#partials p[data-source="b"] strong').inner_text() == 'Discord'
         assert page.locator('#history p').count() == 30
-        assert page.locator('#history p').first.inner_text() == 'Synthetic sentence 6'
+        assert 'Synthetic sentence 6' in page.locator('#history p').first.inner_text()
         page.locator('summary').click()
         page.locator('#font').fill('36')
         page.locator('#font').dispatch_event('input')
         assert page.locator('main').evaluate('(el)=>getComputedStyle(el).fontSize') == '36px'
+        page.locator('#pause').click()
+        page.get_by_role('button', name='Resume capture').wait_for()
+        page.locator('#pause').click()
+        page.get_by_role('button', name='Pause capture').wait_for()
         page.reload()
-        page.locator('#partial').filter(has_text='*laughter*').wait_for()
+        page.locator('#partials p').filter(has_text='Discord *laughter*').wait_for()
         assert page.locator('#history p').count() == 30
+        # Every connected display must clear, and cleared captions must stay gone after reload.
+        second = browser.new_page(); second.goto(url)
+        second.locator('#history p').first.wait_for()
         page.locator('summary').click()
         page.locator('#clear').click()
+        page.wait_for_function('document.querySelectorAll("#history p").length === 0')
+        second.wait_for_function('document.querySelectorAll("#history p").length === 0')
+        page.reload()
+        page.wait_for_function('document.querySelector("#status").textContent !== "Connecting…"')
         assert page.locator('#history p').count() == 0
+        assert page.locator('#partials p').count() == 0
+        page.locator('#enable-a').uncheck()
+        page.wait_for_function('!document.querySelector("#enable-a").checked')
+        assert page.locator('#enable-b').is_checked()
         assert not errors, errors
         browser.close()
-    print('PASS Chromium integration: real WebSocket, history/reconnect, vocal cue, font size, clear')
+    print('PASS browser: two labels/partials, 30 entries, reconnect, font, pause/resume, server clear across displays/reload, source disable')
 finally:
     child.terminate()
     child.wait(timeout=5)
