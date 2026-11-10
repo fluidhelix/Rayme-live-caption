@@ -28,7 +28,7 @@ Verified the existing clean checkout at `feature/windows-loopback-captions`, HEA
 | `windows-captions/audio.js` | PCM-derived segment capture offsets; preserve Phase 1 segmenter/scheduler behavior. |
 | `windows-captions/capture.js` | Process command arguments, validated discovery metadata, terminal process errors and source status. Device reconnect fallback retained. |
 | `windows-captions/sources.js` | New fair shared scheduler and independent source lifecycle manager. |
-| `windows-captions/main.js` | One Whisper instance; source discovery/control orchestration, serialized controls and coordinated cleanup. |
+| `windows-captions/main.js` | One Whisper instance; source discovery/control orchestration, configured default output selection, serialized controls and coordinated cleanup. |
 | `windows-captions/whisper.js` | Disable transcription context carryover across requests/sources. |
 | `windows-captions/server.js` | Source snapshots/replay, attribution, configuration, pause and actual server history clear. Local token/origin protection retained. |
 | `windows-captions/overlay.html` | Two source controls/labels/partials, lifecycle statuses/metrics and synchronized clear. |
@@ -43,7 +43,7 @@ Verified the existing clean checkout at `feature/windows-loopback-captions`, HEA
 
 - Node suite: **20 passed**, including retained Phase 1 regressions; no Discord credentials or private samples.
 - Chromium/Playwright: **passed**, using a real local WebSocket fixture with two independent source labels/partials, 30-entry history, font adjustment, reconnect, pause/resume, two-display clear and reload, and independent source disable.
-- .NET 10.0.403 native/test projects: compiled successfully. Native executable test harness: **10 PASS groups** covering five input formats, silence, session discovery/grouping/missing metadata, PID reuse, activation failure/restart cleanup, and bounded native buffering. These pure conversion/metadata/policy checks ran in Linux; they do not exercise COM audio activation.
+- .NET 10.0.403 native/test projects: compiled successfully. A browser rerun exposed a CSP-incompatible string-evaluation assertion; it was replaced with locator assertions without changing CSP. Native executable test harness: **10 PASS groups** covering five input formats, silence, session discovery/grouping/missing metadata, PID reuse, activation failure/restart cleanup, and bounded native buffering. These pure conversion/metadata/policy checks ran in Linux; they do not exercise COM audio activation.
 - Self-contained single-file Windows x64 helper cross-published successfully. This is packaging evidence; the executable was not run in Linux.
 - `git diff --check` and protected Discord/lockfile comparison pass.
 

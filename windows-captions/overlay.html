@@ -13,7 +13,7 @@
 <main aria-label="Caption history"><div id="source-status" role="status"></div><div id="history"></div><div id="partials"></div><p id="partial" hidden></p><p id="empty">Waiting for conversation…</p></main>
 <script>
 const historyEl=document.getElementById('history'),partial=document.getElementById('partial'),statusEl=document.getElementById('status'),devices=document.getElementById('devices'),empty=document.getElementById('empty');
-let entries=[],partials={},sources={},apps=[],outputs=[],socket,paused=false,follow=true;
+let entries=[],partials={},sources={},apps=[],outputs=[],socket,paused=false,follow=true,deviceDefault='default';
 const watermarks=new Map();
 window.addEventListener('scroll',()=>{follow=innerHeight+scrollY>=document.body.scrollHeight-80;});
 function key(e){return (e.source?.id||'legacy')+':'+(e.source?.generation||0);}
@@ -22,12 +22,12 @@ function render(){const keep=new Set([...entries.map(key),...Object.values(parti
 function send(e){if(socket?.readyState===1)socket.send(JSON.stringify(e));}
 function controls(supported){
  for(const slot of ['a','b']){const select=document.getElementById('app-'+slot),current=sources[slot]?.source.identity,previous=select.value;select.replaceChildren(new Option('Select application',''),...apps.map(a=>new Option(a.name+' (PID '+a.pid+')',a.id)));if(current&&!apps.some(a=>a.id===current))select.add(new Option('Selected process unavailable — refresh/reselect',current));select.value=current||previous;const enable=document.getElementById('enable-'+slot);enable.checked=!!sources[slot];if(supported!==undefined){select.disabled=!supported;enable.disabled=!supported;}}
- const previous=devices.value;devices.replaceChildren(new Option('Windows default output','default'),...outputs.map(d=>new Option(d.name,d.id)));devices.value=sources.device?.source.identity||previous||'default';document.getElementById('enable-device').checked=!!sources.device;document.getElementById('pause').textContent=paused?'Resume capture':'Pause capture';
+ const previous=devices.value;devices.replaceChildren(new Option('Windows default output','default'),...outputs.map(d=>new Option(d.name,d.id)));devices.value=sources.device?.source.identity||previous||deviceDefault;document.getElementById('enable-device').checked=!!sources.device;document.getElementById('pause').textContent=paused?'Resume capture':'Pause capture';
 }
 function handle(e){
- if(e.type==='snapshot'){entries=e.history;partials=e.partials||{};sources=e.sources||{};apps=e.apps||[];outputs=e.devices;paused=e.paused;statusEl.textContent=e.status;for(const item of entries)watermarks.set(key(item),Math.max(watermarks.get(key(item))||0,item.id));if(e.partial)partials.legacy=e.partial;controls(e.processSupported);render();return;}
+ if(e.type==='snapshot'){entries=e.history;partials=e.partials||{};sources=e.sources||{};apps=e.apps||[];outputs=e.devices;deviceDefault=e.selected||'default';paused=e.paused;statusEl.textContent=e.status;for(const item of entries)watermarks.set(key(item),Math.max(watermarks.get(key(item))||0,item.id));if(e.partial)partials.legacy=e.partial;controls(e.processSupported);render();return;}
  if(e.type==='status')statusEl.textContent=e.message;
- if(e.type==='devices'){outputs=e.devices;controls();}
+ if(e.type==='devices'){outputs=e.devices;deviceDefault=e.selected||deviceDefault;controls();}
  if(e.type==='applications'){apps=e.apps;controls(e.supported);if(!e.supported)statusEl.textContent='Application loopback unsupported on this OS. Use whole-device fallback.';}
  if(e.type==='source-status'||e.type==='reset'){if(e.source){if(sources[e.source.id]?.source.generation>e.source.generation)return;sources[e.source.id]=e.type==='reset'?{source:e.source,state:'waiting',message:'Waiting for audio'}:e;if(e.type==='reset')delete partials[e.source.id];controls();render();}else{partials={};render();}}
  if(e.type==='source-removed'){delete sources[e.source.id];delete partials[e.source.id];controls();render();}

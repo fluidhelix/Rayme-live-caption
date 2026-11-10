@@ -2,7 +2,7 @@
 import os
 import subprocess
 from pathlib import Path
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, expect
 root = Path(__file__).resolve().parents[1]
 fixture = r"""
 const {createUI}=require('./windows-captions/server');
@@ -51,14 +51,14 @@ try:
         second.locator('#history p').first.wait_for()
         page.locator('summary').click()
         page.locator('#clear').click()
-        page.wait_for_function('document.querySelectorAll("#history p").length === 0')
-        second.wait_for_function('document.querySelectorAll("#history p").length === 0')
+        expect(page.locator('#history p')).to_have_count(0)
+        expect(second.locator('#history p')).to_have_count(0)
         page.reload()
-        page.wait_for_function('document.querySelector("#status").textContent !== "Connecting…"')
+        expect(page.locator('#enable-b')).to_be_checked()
         assert page.locator('#history p').count() == 0
         assert page.locator('#partials p').count() == 0
         page.locator('#enable-a').uncheck()
-        page.wait_for_function('!document.querySelector("#enable-a").checked')
+        expect(page.locator('#source-status div').filter(has_text='Chrome')).to_have_count(0)
         assert page.locator('#enable-b').is_checked()
         assert not errors, errors
         browser.close()

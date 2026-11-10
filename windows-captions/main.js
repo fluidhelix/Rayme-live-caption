@@ -22,7 +22,7 @@ async function main() {
     const threshold = Number(process.env.WINDOWS_SILENCE_RMS || 80);
     if (!Number.isFinite(threshold) || threshold < 0 || threshold > 32767) throw new Error('WINDOWS_SILENCE_RMS must be 0–32767.');
     const refresh = async () => {
-      ui.publish({ type: 'devices', devices: await listDevices(helper), selected: 'default' });
+      ui.publish({ type: 'devices', devices: await listDevices(helper), selected: process.env.WINDOWS_AUDIO_DEVICE || 'default' });
       try { const result = await listApplications(helper); ui.publish({ type: 'applications', ...result }); }
       catch { ui.publish({ type: 'status', message: 'Application discovery unavailable. Whole-device capture remains available; install the Phase 2 helper.' }); }
     };
