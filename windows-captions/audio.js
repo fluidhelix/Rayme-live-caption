@@ -64,7 +64,9 @@ class Scheduler {
     } catch (e) { if (!this.closed && epoch === this.epoch) this.status('Transcription failed. Check the local Whisper server; retrying with new audio.'); }
     finally { this.busy = false; this.controller = null; this.pump(); }
   }
-  reset() { this.epoch++; this.controller?.abort(); this.finals = []; this.partial = null; }
-  close() { this.closed = true; this.reset(); }
+  // Let active inference finish: HTTP cancellation need not cancel native GPU work.
+  // Invalidating its result prevents repeated device changes from queuing backend jobs.
+  reset() { this.epoch++; this.finals = []; this.partial = null; }
+  close() { this.closed = true; this.controller?.abort(); this.reset(); }
 }
 module.exports = { wav, Segmenter, Scheduler };
