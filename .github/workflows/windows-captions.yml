@@ -1,0 +1,38 @@
+name: Windows caption helper
+on:
+  push:
+    branches: ['feature/**', main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Synthetic format conversion tests
+        run: dotnet run --project native/LoopbackCapture.Tests -c Release
+      - name: Publish self-contained helper
+        run: dotnet publish native/LoopbackCapture -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o artifacts/windows-loopback
+      - name: Verify executable device enumeration (empty list is valid on CI)
+        shell: pwsh
+        run: |
+          $json = & ./artifacts/windows-loopback/LoopbackCapture.exe --list
+          if ($LASTEXITCODE -ne 0) { throw 'Helper failed to enumerate playback devices' }
+          $null = $json | ConvertFrom-Json
+          Get-FileHash ./artifacts/windows-loopback/LoopbackCapture.exe -Algorithm SHA256 | Format-List | Out-File artifacts/windows-loopback/SHA256.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-loopback-win-x64
+          path: artifacts/windows-loopback/
+          if-no-files-found: error

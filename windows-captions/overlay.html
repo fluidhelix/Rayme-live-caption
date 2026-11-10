@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Windows Live Captions</title>
+<style>
+:root{color-scheme:dark;--fs:24px}*{box-sizing:border-box}body{margin:0;background:#313338;color:#f2f3f5;font-family:'Segoe UI',sans-serif}header{position:sticky;top:0;background:#1e1f22;padding:12px;border-bottom:1px solid #5865f2}label,button,select{font:inherit}select{max-width:50vw}button,select{background:#2b2d31;color:#f2f3f5;border:1px solid #80848e;border-radius:4px;padding:5px}#status{margin-bottom:10px;color:#ffdf80}main{padding:12px;font-size:var(--fs);line-height:1.5}p{background:#2b2d31;padding:10px;margin:6px 0;overflow-wrap:anywhere}#partial{border-left:4px solid #5865f2;color:#dedfff}#empty{color:#b5bac1}input{vertical-align:middle}details{margin-top:8px}
+</style>
+<header><div id="status" role="status">Connecting…</div><label>Playback output <select id="devices"><option value="default">Windows default output</option></select></label> <button id="refresh">Refresh devices</button>
+<details><summary>Caption settings</summary><label>Text size <input id="font" type="range" min="16" max="48" value="24"></label> <button id="clear">Clear history</button><p>Move and resize this browser window normally. Only playback audio is captured. History stays in memory.</p></details></header>
+<main aria-label="Caption history"><div id="history"></div><p id="partial" hidden></p><p id="empty">Waiting for conversation…</p></main>
+<script>
+const historyEl=document.getElementById('history'),partial=document.getElementById('partial'),statusEl=document.getElementById('status'),devices=document.getElementById('devices'),empty=document.getElementById('empty');
+let entries=[],socket,lastFinal=0,follow=true;
+window.addEventListener('scroll',()=>{follow=innerHeight+scrollY>=document.body.scrollHeight-80;});
+function render(){historyEl.replaceChildren(...entries.map(e=>{const p=document.createElement('p');p.textContent=e.text;return p;}));empty.hidden=entries.length>0||!partial.hidden;if(follow)window.scrollTo(0,document.body.scrollHeight);}
+function handle(e){
+ if(e.type==='snapshot'){entries=e.history;lastFinal=entries.at(-1)?.id||0;partial.textContent=e.partial?.text||'';partial.hidden=!e.partial?.text;statusEl.textContent=e.status;handle({type:'devices',devices:e.devices,selected:e.selected});render();}
+ if(e.type==='status')statusEl.textContent=e.message;
+ if(e.type==='devices'){devices.replaceChildren(new Option('Windows default output','default'),...e.devices.map(d=>new Option(d.name+(d.isDefault?' (default)':''),d.id)));devices.value=e.selected||'default';}
+ if(e.type==='reset'){partial.hidden=true;render();}
+ if(e.type==='caption'){
+  if(e.final){if(e.id<=lastFinal)return;lastFinal=e.id;partial.hidden=true;if(e.text)entries.push(e);entries=entries.slice(-30);}
+  else {if(e.id<=lastFinal)return;partial.textContent=e.text;partial.hidden=!e.text;}
+  render();
+ }
+}
+function connect(){socket=new WebSocket(location.origin.replace('http:','ws:')+'/?token='+new URLSearchParams(location.search).get('token'));socket.onmessage=e=>{try{handle(JSON.parse(e.data));}catch{}};socket.onclose=()=>{statusEl.textContent='Connection lost. Reconnecting…';setTimeout(connect,1500);};socket.onerror=()=>socket.close();}
+devices.onchange=()=>{if(socket.readyState===1)socket.send(JSON.stringify({type:'select',id:devices.value}));};document.getElementById('refresh').onclick=()=>{if(socket.readyState===1)socket.send(JSON.stringify({type:'refresh'}));};document.getElementById('font').oninput=e=>document.documentElement.style.setProperty('--fs',e.target.value+'px');document.getElementById('clear').onclick=()=>{entries=[];partial.hidden=true;render();};connect();
+</script></html>

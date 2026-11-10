@@ -5,7 +5,9 @@
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "start:windows": "node windows-captions/main.js",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "discord.js": "^14.25.1",
