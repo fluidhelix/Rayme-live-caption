@@ -7,6 +7,42 @@ on:
 permissions:
   contents: read
 jobs:
+  caption-overlay:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Native overlay state, settings and multi-monitor bounds tests
+        run: dotnet run --project native/CaptionOverlay.Tests -c Release
+      - name: Native authenticated WebSocket session against production server
+        run: node test/native-overlay-session.js
+      - name: Publish self-contained native overlay
+        run: dotnet publish native/CaptionOverlay -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o artifacts/windows-overlay
+      - name: Packaged WPF private handoff and graceful backend shutdown
+        run: node test/native-overlay-lifecycle.js artifacts/windows-overlay/CaptionOverlay.exe
+      - name: Packaged WPF executable synthetic smoke test (not physical monitor validation)
+        shell: pwsh
+        run: |
+          $process = Start-Process ./artifacts/windows-overlay/CaptionOverlay.exe -ArgumentList '--smoke-test' -PassThru
+          if (!$process.WaitForExit(30000)) { $process.Kill(); throw 'Packaged overlay smoke test timed out' }
+          $process.Refresh()
+          if ($process.ExitCode -ne 0) { throw "Packaged WPF smoke test failed: $($process.ExitCode)" }
+          Get-FileHash ./artifacts/windows-overlay/CaptionOverlay.exe -Algorithm SHA256 | Format-List | Out-File artifacts/windows-overlay/SHA256.txt
+          Copy-Item PHASE3_REPORT.md artifacts/windows-overlay/
+          Copy-Item WINDOWS-CAPTIONS.md artifacts/windows-overlay/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-caption-overlay-win-x64
+          path: artifacts/windows-overlay/
+          if-no-files-found: error
   build-test:
     runs-on: windows-latest
     timeout-minutes: 25

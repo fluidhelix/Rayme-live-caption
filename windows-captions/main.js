@@ -2,7 +2,7 @@
 require('dotenv').config();
 const path = require('node:path');
 const fs = require('node:fs');
-const { spawn } = require('node:child_process');
+const { launchOverlay } = require('./native-overlay');
 const { SourceScheduler, SourceManager } = require('./sources');
 const { Whisper, resolveRuntime } = require('./whisper');
 const { listDevices, listApplications } = require('./capture');
@@ -12,10 +12,10 @@ async function main() {
   const helper = path.join(__dirname, '..', 'native', 'bin', 'LoopbackCapture.exe');
   if (!fs.existsSync(helper)) throw new Error('Missing audio helper. Download windows-loopback-win-x64 from GitHub Actions into native\\bin. See WINDOWS-CAPTIONS.md.');
   const whisper = new Whisper(resolveRuntime());
-  let ui, manager, scheduler, stopped = false, controls = Promise.resolve();
+  let ui, overlay, manager, scheduler, stopped = false, controls = Promise.resolve();
   // Serialize selection/pause commands; no competing worker creation during rapid UI changes.
   const control = task => { controls = controls.catch(() => {}).then(() => { if (!stopped) return task(); }); return controls; };
-  const shutdown = async () => { if (stopped) return; stopped = true; await controls.catch(() => {}); scheduler?.close(); await manager?.close(); await whisper.close(); await ui?.close(); };
+  const shutdown = async () => { if (stopped) return; stopped = true; await controls.catch(() => {}); await overlay?.close(); scheduler?.close(); await manager?.close(); await whisper.close(); await ui?.close(); };
   const signal = () => shutdown().then(() => process.exit(0));
   process.once('SIGINT', signal); process.once('SIGTERM', signal);
   try {
@@ -29,8 +29,9 @@ async function main() {
     ui = await createUI({ port: Number(process.env.WINDOWS_CAPTION_PORT || 8090), onRefresh: () => control(refresh),
       onConfigure: (slot, descriptor) => control(async () => { if (!manager) throw Error('Wait for Whisper readiness'); await manager.configure(slot, descriptor); }),
       onPause: paused => control(async () => { if (!manager) throw Error('Wait for Whisper readiness'); await manager.pause(paused); }) });
-    const browser = spawn('rundll32.exe', ['url.dll,FileProtocolHandler', ui.url], { windowsHide: true, stdio: 'ignore' });
-    browser.on('error', () => ui.publish({ type: 'status', message: 'Could not open the default Windows browser.' }));
+    overlay = launchOverlay({ url: ui.url, publish: ui.publish });
+    await overlay.ready;
+    if (stopped) return;
     console.log('Caption window opened. Ctrl+C stops all capture workers and Whisper.');
     await whisper.start(message => ui.publish({ type: 'status', message }));
     if (stopped) return;
