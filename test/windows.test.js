@@ -42,6 +42,20 @@ test('Whisper sends local WAV, preserves annotations, rejects HTTP errors and no
  try {assert.equal(await w.infer(tone(100)),'[laughter] *coughing* *sighing*');mode='error';await assert.rejects(w.infer(tone(100)),/HTTP 500/);mode='html';await assert.rejects(w.infer(tone(100)));}finally{await s.close();}
 });
 test('missing runtime is actionable without needing Discord credentials',()=>{assert.throws(()=>resolveRuntime({},'/does-not-exist'),/Missing local Whisper/);});
+test('test-only startup diagnostics report a real spawn failure without environment secrets',async()=>{
+ const s=await serve((_req,res)=>res.end());const port=new URL(s.url).port;await s.close();
+ let diagnostic;
+ const w=new Whisper({exe:require('node:path').join(process.cwd(),'missing-whisper-runtime','whisper-server.exe'),model:'unused.bin'},
+  {WHISPER_PORT:port,WHISPER_THREADS:'secret value',PRIVATE_TOKEN:'must-not-appear'},
+  {testOnlyStartupDiagnostics:d=>{diagnostic=d;}});
+ try {
+  await assert.rejects(w.start(()=>{}),/exited before becoming ready/);
+  assert.equal(diagnostic.spawnError,'ENOENT');assert.equal(diagnostic.exitCode,w.child.exitCode);
+  assert.equal(diagnostic.stdout,'');assert.equal(diagnostic.stderr,'');
+  assert.equal(diagnostic.args.includes('-nc'),false);assert.ok(diagnostic.args.includes('[redacted]'));
+  assert.ok(!JSON.stringify(diagnostic).includes('must-not-appear'));
+ } finally {await w.close();}
+});
 test('capture disconnect resets pipeline; close kills owned child and cancels retry',async()=>{
  let child;const status=[];let resets=0;let bytes=0;
  const c=new Capture('fake',b=>bytes+=b.length,s=>status.push(s),()=>resets++,()=>{child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();child.exitCode=null;child.kill=()=>{child.exitCode=0;child.emit('exit',0);};return child;});

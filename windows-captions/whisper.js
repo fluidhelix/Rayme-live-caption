@@ -39,20 +39,38 @@ async function stopChild(child) {
   });
 }
 class Whisper {
-  constructor(runtime, env = process.env) { this.runtime = runtime; this.env = env; this.port = Number(env.WHISPER_PORT || 8178); this.url = `http://127.0.0.1:${this.port}`; this.abort = new AbortController(); }
+  constructor(runtime, env = process.env, { testOnlyStartupDiagnostics } = {}) { this.runtime = runtime; this.env = env; this.testOnlyStartupDiagnostics = testOnlyStartupDiagnostics; this.port = Number(env.WHISPER_PORT || 8178); this.url = `http://127.0.0.1:${this.port}`; this.abort = new AbortController(); }
   async start(status) {
     // Refuse another process on the port; never mistake an unrelated server for our child.
     await new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', () => reject(new Error(`Port ${this.port} is busy. Close the other caption mode first.`))); s.listen(this.port, '127.0.0.1', () => s.close(resolve)); });
     const { exe, model } = this.runtime; const dir = path.dirname(exe);
-    const args = ['-m', model, '--host', '127.0.0.1', '--port', String(this.port), '-t', this.env.WHISPER_THREADS || '4', '-l', this.env.WHISPER_LANGUAGE || 'en', '-bs', '5', '-bo', '5', '-nc'];
+    // whisper-server rejects the CLI-only -nc flag and already defaults no_context to true.
+    const args = ['-m', model, '--host', '127.0.0.1', '--port', String(this.port), '-t', this.env.WHISPER_THREADS || '4', '-l', this.env.WHISPER_LANGUAGE || 'en', '-bs', '5', '-bo', '5'];
     if (this.env.WHISPER_GPU === 'false') args.push('-ng');
     if (this.env.FLASH_ATTN === 'true') args.push('-fa');
-    this.child = spawn(exe, args, { cwd: dir, windowsHide: true, env: { ...process.env, ...this.env, PATH: dir + path.delimiter + process.env.PATH }, stdio: ['ignore', 'ignore', 'pipe'] });
+    // Explicit test hook only: retain at most 8 KiB per stream until readiness.
+    // Production never retains diagnostics, and inference output is never captured.
+    const diagnose = typeof this.testOnlyStartupDiagnostics === 'function';
+    let capturing = diagnose, stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), spawnError;
+    const append = (previous, chunk) => Buffer.concat([previous, chunk.subarray(0, 8192)]).subarray(0, 8192);
+    this.child = spawn(exe, args, { cwd: dir, windowsHide: true, env: { ...process.env, ...this.env, PATH: dir + path.delimiter + process.env.PATH }, stdio: ['ignore', diagnose ? 'pipe' : 'ignore', 'pipe'] });
+    const closed = new Promise(resolve => this.child.once('close', resolve));
     this.failed = false;
-    this.child.on('error', () => { this.failed = true; status('Could not start Whisper. Check executable and runtime DLLs.'); });
+    this.child.on('error', error => { spawnError = error.code; this.failed = true; status('Could not start Whisper. Check executable and runtime DLLs.'); });
     this.child.on('exit', () => { this.failed = true; status('Whisper stopped. Restart captions after checking the local installation.'); });
-    this.child.stderr.on('data', () => {}); // Drain native diagnostics; never retain audio/transcripts.
-    await waitReady(this.url, () => !this.failed && this.child.exitCode === null, { signal: this.abort.signal });
+    this.child.stdout?.on('data', chunk => { if (capturing) stdout = append(stdout, chunk); });
+    this.child.stderr.on('data', chunk => { if (capturing) stderr = append(stderr, chunk); });
+    try {
+      await waitReady(this.url, () => !this.failed && this.child.exitCode === null, { signal: this.abort.signal });
+    } catch (error) {
+      // 'close' follows exit and the final pipe data, including Windows loader errors.
+      if (this.failed || this.child.exitCode !== null || this.child.signalCode) await closed;
+      if (diagnose) this.testOnlyStartupDiagnostics({ exe, cwd: dir, args: args.map((arg, i) =>
+        i > 0 && ['-t', '-l'].includes(args[i - 1]) && !/^[a-zA-Z0-9.-]{1,32}$/.test(arg) ? '[redacted]' : arg),
+        exitCode: this.child.exitCode, signal: this.child.signalCode, spawnError,
+        stdout: stdout.toString('utf8'), stderr: stderr.toString('utf8'), limitBytesPerStream: 8192 });
+      throw error;
+    } finally { capturing = false; stdout = stderr = Buffer.alloc(0); }
   }
   async infer(pcm, signal) {
     const body = new FormData(); body.set('file', new Blob([wav(pcm)], { type: 'audio/wav' }), 'audio.wav');

@@ -3,6 +3,8 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const net = require('node:net');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 const { WebSocket } = require('ws');
 const { Segmenter } = require('../../windows-captions/audio');
 const { SourceScheduler } = require('../../windows-captions/sources');
@@ -10,12 +12,29 @@ const { Whisper } = require('../../windows-captions/whisper');
 const { createUI } = require('../../windows-captions/server');
 const { readSpeech,report } = require('./common');
 async function speechE2E(runtime, output) {
-  const rows=[]; let whisper,ui,scheduler,ws;
+  const rows=[]; let whisper,ui,scheduler,ws,startupDiagnostics,runtimeDiagnostics;
   try {
+    const cwd=path.dirname(runtime.server);
+    const probe=args=>{const result=spawnSync(runtime.server,args,{cwd,windowsHide:true,timeout:30000,maxBuffer:16384,
+      env:{...process.env,PATH:cwd+path.delimiter+process.env.PATH},encoding:'utf8'});
+      return {args,exitCode:result.status,signal:result.signal,error:result.error?.code,stdout:(result.stdout||'').slice(0,8192),stderr:(result.stderr||'').slice(0,8192)};};
+    runtimeDiagnostics={server:runtime.server,cwd,files:fs.readdirSync(cwd).filter(f=>/\.(dll|exe)$/i.test(f)).slice(0,100),
+      model:{path:runtime.model,bytes:fs.statSync(runtime.model).size},help:probe(['--help'])};
+    assert.equal(runtimeDiagnostics.help.error,undefined,'Native --help failed to execute');
+    assert.equal(runtimeDiagnostics.help.exitCode,0,'Native --help failed (check runtime DLLs)');
+    assert.match(runtimeDiagnostics.help.stdout+runtimeDiagnostics.help.stderr,/--model/,'Native --help did not print server flags');
+    // Preserve native evidence for the original launcher failure with this pinned build.
+    // Only replay when help confirms -nc is unsupported, so no second server can start.
+    if(!/(?:^|\s)-nc(?:\s|,)|--no-context/m.test(runtimeDiagnostics.help.stdout+runtimeDiagnostics.help.stderr)) {
+      runtimeDiagnostics.originalStartup=probe(['-m',runtime.model,'--host','127.0.0.1','--port','8178','-t','2','-l','en','-bs','5','-bo','5','-nc','-ng']);
+      assert.match(runtimeDiagnostics.originalStartup.stderr,/unknown argument: -nc/,'Original startup failed for an unexpected native reason');
+      rows.push({check:'Original native startup diagnosis',outcome:'PASS',evidence:`Original arguments: exit ${runtimeDiagnostics.originalStartup.exitCode}; ${runtimeDiagnostics.originalStartup.stderr.split(/\r?\n/)[0]}. Actual compiled --help succeeds from the executable directory; full help, arguments, DLL inventory and model metadata are in speech.json.`});
+    }
     const pcm=readSpeech(runtime.fixture);
     // An ephemeral test-only port; production settings/environment are never changed.
     const port=await new Promise(r=>{const s=net.createServer();s.listen(0,'127.0.0.1',()=>{const p=s.address().port;s.close(()=>r(p));});});
-    whisper=new Whisper({exe:runtime.server,model:runtime.model},{WHISPER_PORT:String(port),WHISPER_GPU:'false',WHISPER_THREADS:'2',WHISPER_LANGUAGE:'en'});
+    whisper=new Whisper({exe:runtime.server,model:runtime.model},{WHISPER_PORT:String(port),WHISPER_GPU:'false',WHISPER_THREADS:'2',WHISPER_LANGUAGE:'en'},
+      {testOnlyStartupDiagnostics:diagnostics=>{startupDiagnostics=diagnostics;}});
     const startup=[];await whisper.start(message=>startup.push(message));
     rows.push({check:'Actual CPU whisper-server health',outcome:'PASS',evidence:'Real child server returned /health status ok; CI-only tiny.en model.'});
     ui=await createUI({port:0});const received=[];
@@ -44,9 +63,9 @@ async function speechE2E(runtime, output) {
     assert.match(text,/ask\s+not\s+what\s+your\s+country/,'Expected ordered speech phrase');
     assert.equal(ui.state.history.length,finals.length);
     rows.push({check:'Licensed WAV → production segmentation → shared scheduler → real Whisper HTTP → publication/WebSocket history',outcome:'PASS',evidence:`${jobs.length} real segment jobs, ${finals.length} finalized captions, keyword recall ${recall.toFixed(2)}. No HTTP/inference mocks; no audio device involved.`});
-  } catch(e){ rows.push({check:'Speech end-to-end integration',outcome:'FAIL',evidence:e.message}); }
+  } catch(e){ rows.push({check:'Speech end-to-end integration',outcome:'FAIL',evidence:e.message+(startupDiagnostics?'\nNative startup: '+JSON.stringify(startupDiagnostics):'')}); }
   finally {scheduler?.close();ws?.terminate();await whisper?.close();await ui?.close();}
-  return report(output,rows,{title:'Real Whisper speech pipeline (no WASAPI)'});
+  return report(output,rows,{title:'Real Whisper speech pipeline (no WASAPI)',startupDiagnostics,runtimeDiagnostics});
 }
 if(require.main===module){const runtimeFile=process.argv[2],output=process.argv[3]||'artifacts/audio-diagnostics/speech.json';(async()=>{try{const runtime=JSON.parse(fs.readFileSync(runtimeFile,'utf8').replace(/^\uFEFF/,''));const r=await speechE2E(runtime,output);if(r.outcome!=='PASS')process.exitCode=1;}catch(e){report(output,[{check:'Required integration inputs',outcome:'FAIL',evidence:e.message}]);process.exitCode=1;}})();}
 module.exports={speechE2E};
