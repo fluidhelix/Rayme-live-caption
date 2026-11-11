@@ -21,6 +21,19 @@ class Worker {
   async close(){this.command('quit');await stopChild(this.child);}
 }
 async function single(exe,args){const w=new Worker(exe,args);try{return await w.event(()=>true);}finally{await w.close();}}
+function selectEndpoint(environment, override) {
+  const endpoints=environment.endpoints;
+  if(!Array.isArray(endpoints))throw Error('Malformed environment response');
+  if(override){
+    const endpoint=endpoints.find(d=>d.id===override);
+    if(!endpoint)throw Error('Requested AUDIO_TEST_ENDPOINT is not active');
+    return {id:endpoint.id,name:endpoint.name,reason:'Explicit AUDIO_TEST_ENDPOINT override'};
+  }
+  const endpoint=environment.defaultEndpoint;
+  if(!endpoint)return {id:null,name:null,reason:'Windows default multimedia render endpoint is unavailable',error:environment.defaultEndpointError};
+  if(!endpoints.some(d=>d.id===endpoint.id))return {id:null,name:null,reason:'Windows default multimedia render endpoint is no longer active'};
+  return {id:endpoint.id,name:endpoint.name,reason:'Windows default multimedia render endpoint (eRender, eMultimedia)'};
+}
 async function probe(options){
   fs.rmSync(options.output,{force:true});
   const rows=[],workers=[],evidence={};let stage='environment';
@@ -35,8 +48,11 @@ async function probe(options){
     if(env.error){const unavailable=capability(env.error);add('Windows audio environment',unavailable?'INCONCLUSIVE':'FAIL',JSON.stringify(env.error));if(!unavailable)return;env.endpoints=[];}
     const endpoints=env.endpoints;if(!Array.isArray(endpoints))throw Error('Malformed environment response');
     add('Rendering endpoint discovery',endpoints.length?'PASS':'INCONCLUSIVE',`${endpoints.length} active rendering endpoint(s); no services, routing, volume or security settings were changed.`);
-    const endpoint=options.endpoint||endpoints[0]?.id||'no-endpoint';
-    if(options.endpoint&&!endpoints.some(d=>d.id===options.endpoint))throw Error('Requested endpoint is not active');
+    const selection=selectEndpoint(env,options.endpoint);evidence.endpointSelection=selection;
+    const selectionOutcome=selection.id?'PASS':selection.error&&!capability(selection.error)?'FAIL':'INCONCLUSIVE';
+    add('Rendering endpoint selection',selectionOutcome,JSON.stringify(selection));
+    if(selectionOutcome==='FAIL')return;
+    const endpoint=selection.id||'no-endpoint';
     // Even without a render endpoint, launch the controlled process and attempt actual activation.
     stage='process activation';
     const a=worker(options.producer,['--tone','440','--endpoint',endpoint]);
@@ -50,7 +66,7 @@ async function probe(options){
     const processAvailable=reference.ok && activated;
     if(reference.ok && !activated) add('Production helper process activation','FAIL',`Helper failed although independent API activation worked: ${activationError}`);
     if(processAvailable)add('Actual production helper process activation','PASS',`Real helper reached ready for controlled PID ${identityA.pid}; independent WASAPI activation also worked. Activation alone is NOT an audio-capture pass.`);
-    if(!endpoints.length){add('Rendered speech / isolated tones','INCONCLUSIVE','No rendering endpoint. The controlled process stayed alive and activation was attempted, but it cannot produce audible Windows render samples.');return;}
+    if(!selection.id){add('Rendered speech / isolated tones','INCONCLUSIVE',`${selection.reason}. The controlled process stayed alive and activation was attempted, but no render device was selected.`);return;}
     stage='tone rendering and process isolation';
     const b=worker(options.producer,['--tone','997','--endpoint',endpoint]);const identityB=await b.event(e=>e.type==='identity');
     let cb;
@@ -83,4 +99,4 @@ async function probe(options){
   return report(options.output,rows,{title:'Real Windows audio',...evidence});
 }
 if(require.main===module){const [helper,producer,fixture,output='artifacts/audio-diagnostics/windows.json',...rest]=process.argv.slice(2);probe({helper,producer,fixture,output,endpoint:process.env.AUDIO_TEST_ENDPOINT}).then(result=>{if(result.outcome==='FAIL'||(rest.includes('--require-audio')&&result.outcome!=='PASS'))process.exitCode=1;}).catch(e=>{report(output,[{check:'Probe infrastructure',outcome:'FAIL',evidence:e.message}]);process.exitCode=1;});}
-module.exports={probe,Worker};
+module.exports={probe,Worker,selectEndpoint};

@@ -19,7 +19,14 @@ static class Program
                     foreach (var endpoint in e.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active)) {
                         using (endpoint) list.Add(new { id = endpoint.ID, name = endpoint.FriendlyName });
                     }
-                    Emit(new { os = Environment.OSVersion.ToString(), supported = OperatingSystem.IsWindowsVersionAtLeast(10,0,22000), endpoints = list });
+                    object? defaultEndpoint = null, defaultEndpointError = null;
+                    try {
+                        // IMMDeviceEnumerator::GetDefaultAudioEndpoint(eRender, eMultimedia), via NAudio.
+                        // https://learn.microsoft.com/windows/win32/api/mmdeviceapi/nf-mmdeviceapi-immdeviceenumerator-getdefaultaudioendpoint
+                        using var endpoint = e.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+                        defaultEndpoint = new { id = endpoint.ID, name = endpoint.FriendlyName };
+                    } catch(Exception ex) { defaultEndpointError = Error(ex); }
+                    Emit(new { os = Environment.OSVersion.ToString(), supported = OperatingSystem.IsWindowsVersionAtLeast(10,0,22000), endpoints = list, defaultEndpoint, defaultEndpointError });
                 } catch(Exception ex) { Emit(new { os = Environment.OSVersion.ToString(), error = Error(ex) }); }
                 return 0;
             }

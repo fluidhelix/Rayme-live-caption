@@ -5,6 +5,39 @@ const fs=require('node:fs');
 const os=require('node:os');
 const path=require('node:path');
 const {spectral,assessIsolation,capability,report}=require('./audio/common');
+const {selectEndpoint}=require('./audio/windows-probe');
+const firstEndpoint={id:'first-device',name:'Other playback device'};
+const defaultEndpoint={id:'usb-speakers',name:'Speakers (6- USB PnP Audio Device)'};
+test('audio probe chooses the Windows multimedia default regardless of enumeration order',()=>{
+ for(const endpoints of [[firstEndpoint,defaultEndpoint],[defaultEndpoint,firstEndpoint]]) {
+  const selected=selectEndpoint({endpoints,defaultEndpoint});
+  assert.equal(selected.id,defaultEndpoint.id);assert.equal(selected.name,defaultEndpoint.name);
+  assert.match(selected.reason,/Windows default multimedia.*eRender, eMultimedia/);
+ }
+ // Re-query results select the current default, rather than caching an earlier device.
+ assert.equal(selectEndpoint({endpoints:[firstEndpoint,defaultEndpoint],defaultEndpoint:firstEndpoint}).id,firstEndpoint.id);
+});
+test('AUDIO_TEST_ENDPOINT overrides the default, including when no default is available',()=>{
+ for(const currentDefault of [defaultEndpoint,null]) {
+  assert.deepEqual(selectEndpoint({endpoints:[firstEndpoint,defaultEndpoint],defaultEndpoint:currentDefault},firstEndpoint.id),
+   {...firstEndpoint,reason:'Explicit AUDIO_TEST_ENDPOINT override'});
+ }
+});
+test('an inactive explicit endpoint fails rather than falling back to the Windows default',()=>{
+ assert.throws(()=>selectEndpoint({endpoints:[defaultEndpoint],defaultEndpoint},'missing-device'),/AUDIO_TEST_ENDPOINT is not active/);
+});
+test('an unavailable Windows default never falls back to the first active endpoint',()=>{
+ const error={hresult:'0x80070490',message:'No default endpoint'};
+ for(const endpoints of [[firstEndpoint],[]]) {
+  const selected=selectEndpoint({endpoints,defaultEndpoint:null,defaultEndpointError:error});
+  assert.equal(selected.id,null);assert.equal(selected.name,null);assert.match(selected.reason,/unavailable/);assert.deepEqual(selected.error,error);
+ }
+ const selected=selectEndpoint({endpoints:[firstEndpoint],defaultEndpoint});
+ assert.equal(selected.id,null);assert.match(selected.reason,/no longer active/);
+});
+test('malformed endpoint discovery is a test failure',()=>{
+ assert.throws(()=>selectEndpoint({defaultEndpoint}),/Malformed environment response/);
+});
 function tone(hz){const b=Buffer.alloc(32000);for(let i=0;i<16000;i++)b.writeInt16LE(Math.round(3000*Math.sin(2*Math.PI*hz*i/16000)),i*2);return b;}
 test('integration diagnostics DSP distinguishes two tones, silence, and mixed leakage',()=>{
  const a=tone(440),b=tone(997),mixed=Buffer.alloc(a.length);for(let i=0;i<a.length;i+=2)mixed.writeInt16LE(a.readInt16LE(i)+b.readInt16LE(i),i);
