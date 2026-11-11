@@ -27,6 +27,7 @@ internal static class DesktopPlacement {
     [DllImport("shcore.dll")] static extern int GetDpiForMonitor(IntPtr monitor, int type, out uint x, out uint y);
     [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr window, out Rect rect);
     [DllImport("user32.dll")] static extern IntPtr MonitorFromWindow(IntPtr window, uint flags);
+    [DllImport("user32.dll")] static extern IntPtr MonitorFromRect(ref Rect rect, uint flags);
     [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] static extern IntPtr GetWindowLongPtr(IntPtr window, int index);
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")] static extern IntPtr SetWindowLongPtr(IntPtr window, int index, IntPtr style);
@@ -47,6 +48,11 @@ internal static class DesktopPlacement {
     }
     public static Bounds Read(IntPtr window) { if (!GetWindowRect(window, out var r)) throw new InvalidOperationException("Could not read window placement"); return new(r.Left,r.Top,r.Right-r.Left,r.Bottom-r.Top); }
     public static string MonitorId(IntPtr window) => DisplayId(Info(MonitorFromWindow(window, 2)).Device);
+    public static Display DisplayFor(Bounds bounds,IReadOnlyList<Display> displays) {
+        var rect=new Rect { Left=(int)bounds.X,Top=(int)bounds.Y,Right=(int)(bounds.X+bounds.Width),Bottom=(int)(bounds.Y+bounds.Height) };
+        string id=DisplayId(Info(MonitorFromRect(ref rect,2)).Device);
+        return displays.First(d=>d.Id==id);
+    }
     public static void Apply(IntPtr window, Bounds bounds) => SetWindowPos(window, IntPtr.Zero, (int)Math.Round(bounds.X),(int)Math.Round(bounds.Y),(int)Math.Round(bounds.Width),(int)Math.Round(bounds.Height), 0x14); // NOZORDER | NOACTIVATE
     public static void ClickThrough(IntPtr window, bool enabled) {
         const int extendedStyle = -20; const long transparent = 0x20, noActivate = 0x08000000;

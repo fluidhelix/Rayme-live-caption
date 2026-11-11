@@ -30,6 +30,8 @@ jobs:
         run: node test/native-overlay-lifecycle.js artifacts/windows-overlay/CaptionOverlay.exe
       - name: Packaged WPF executable synthetic smoke test (not physical monitor validation)
         shell: pwsh
+        env:
+          RAYME_UI_SMOKE_OUTPUT: artifacts/overlay-ui
         run: |
           $process = Start-Process ./artifacts/windows-overlay/CaptionOverlay.exe -ArgumentList '--smoke-test' -PassThru
           if (!$process.WaitForExit(30000)) { $process.Kill(); throw 'Packaged overlay smoke test timed out' }
@@ -37,7 +39,14 @@ jobs:
           if ($process.ExitCode -ne 0) { throw "Packaged WPF smoke test failed: $($process.ExitCode)" }
           Get-FileHash ./artifacts/windows-overlay/CaptionOverlay.exe -Algorithm SHA256 | Format-List | Out-File artifacts/windows-overlay/SHA256.txt
           Copy-Item PHASE3_REPORT.md artifacts/windows-overlay/
+          Copy-Item UI_REFINEMENT_REPORT.md artifacts/windows-overlay/
           Copy-Item WINDOWS-CAPTIONS.md artifacts/windows-overlay/
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-caption-overlay-ui-diagnostics
+          path: artifacts/overlay-ui/
+          if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         with:
           name: windows-caption-overlay-win-x64

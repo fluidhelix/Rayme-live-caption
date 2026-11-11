@@ -8,7 +8,7 @@ See [PHASE2_REPORT.md](PHASE2_REPORT.md) for current setup, test evidence, chang
 
 ## Shared installation details
 
-Phase 3 adds a native floating caption window. See [PHASE3_REPORT.md](PHASE3_REPORT.md) for the implementation, evidence, developer commands and multi-monitor test checklist.
+Phase 3 adds a native floating caption window. The [UI refinement report](UI_REFINEMENT_REPORT.md) covers its modern overlay, Controls and tray design, retained preferences, screenshots and verification limits. See [PHASE3_REPORT.md](PHASE3_REPORT.md) for the implementation, evidence, developer commands and multi-monitor test checklist.
 
 1. Update to this feature branch/PR. Keep your existing `.env` and `whisper` installation. Node.js 22.12+ and your existing whisper-server/CUDA DLLs and model are required. No Python, .NET runtime, SDK, Visual Studio or virtual audio cable is needed by the end user.
 2. Open the repository's **Actions → Windows caption helper** workflow. Select a successful run for this branch/commit and download **windows-loopback-win-x64** (GitHub sign-in may be required). Extract `LoopbackCapture.exe` into `native\bin\LoopbackCapture.exe`. `SHA256.txt` is provided with the artifact. No helper binaries or models are committed. On ARM Windows, x64 emulation is unverified.

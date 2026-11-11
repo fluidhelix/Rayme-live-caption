@@ -4,8 +4,10 @@
     <UseWPF>true</UseWPF><UseWindowsForms>true</UseWindowsForms><EnableWindowsTargeting>true</EnableWindowsTargeting>
     <Nullable>enable</Nullable><ApplicationManifest>app.manifest</ApplicationManifest>
     <AssemblyName>CaptionOverlay</AssemblyName>
+    <ApplicationIcon>Assets/Rayme.ico</ApplicationIcon>
     <!-- WPF owns DPI awareness via the manifest; WinForms is used only for NotifyIcon. -->
     <NoWarn>$(NoWarn);WFO0003</NoWarn>
   </PropertyGroup>
   <ItemGroup><ProjectReference Include="../CaptionOverlay.Core/CaptionOverlay.Core.csproj" /></ItemGroup>
+  <ItemGroup><Resource Include="Assets/Rayme.ico" /></ItemGroup>
 </Project>

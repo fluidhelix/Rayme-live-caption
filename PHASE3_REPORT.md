@@ -1,12 +1,14 @@
 # Phase 3 — native floating caption overlay
 
+The modern UI refinement supersedes the initial visual design described below. See [UI_REFINEMENT_REPORT.md](UI_REFINEMENT_REPORT.md) for the shared component system, redesigned Controls/tray, stable partial/final typography and current validation.
+
 Baseline: `75f359784fe53eebb09995f355fcf08b20c48cf4`, fetched from `feature/windows-loopback-captions` before implementation. Work remains on that branch and draft PR #1; no merge into `main` is authorized or performed. The implementation commit is identified in the final handoff and the Actions run's commit link.
 
 ## What is implemented
 
 `native/CaptionOverlay` is a WPF .NET 10 Windows x64 client, published as a self-contained executable. It uses software rendering, one native UI process and no additional browser engine. The self-contained distribution bundles the Windows desktop runtime (approximately 166 MiB in the Linux cross-publish); this is download size, not measured working-set usage.
 
-The frameless floating window has rounded translucent corners, a small drag header, edge resizing, a resize grip, 300×180 DIP minimum dimensions, position/size lock and optional always-on-top (default on). Captions wrap naturally. Text size (16–60 DIP) is independent of window size. Background alpha is adjustable from 70–100%; text stays opaque. The floor keeps the small source labels above 4.5:1 contrast even over a white desktop (tested with the actual alpha-byte rounding). Source A/B/playback accents have six named palettes. Labels retain A/B/output identification and a full-name tooltip when narrow; partials use italics, a distinct background and a live label. Transcript strings are assigned to `TextBlock.Text`, never interpreted as markup. The conversation scroll follows new content only when the reader is already near the bottom.
+The frameless floating window has rounded translucent corners, a small drag header, edge resizing, a resize grip, 300×180 DIP minimum dimensions, position/size lock and optional always-on-top (default on). Captions wrap naturally. Text size (16–60 DIP) is independent of window size. Background alpha is adjustable from 70–100%; text stays opaque. The floor keeps the small source labels above 4.5:1 contrast even over a white desktop (tested with the actual alpha-byte rounding). Source A/B/playback accents have six named palettes. Labels retain A/B/output identification and a full-name tooltip when narrow; partials now use the same normal typography as finals and a small LIVE badge, retaining the same visual row on completion. Transcript strings are assigned to `TextBlock.Text`, never interpreted as markup. The conversation scroll follows new content only when the reader is already near the bottom.
 
 A separate compact, scrollable native Controls window provides application/device discovery refresh, selection and enablement for A/B or whole-device fallback, pause/resume, shared Clear History, appearance, locking, topmost, placement reset and optional click-through. Application choices include PID to distinguish similarly named processes. Every capture command goes to the existing server; its validation and `SourceManager` remain the sole configuration authority. The browser interface remains functional.
 
@@ -77,7 +79,7 @@ The platform-independent overlay core/tests can run on Linux with the .NET 10 SD
 
 ## Remaining limitations and required physical checks
 
-No known compilation or executed-test failure remains. The actual WPF rendering/interaction and packaged pipe lifecycle are not yet executed in this Linux session; CI results must be checked externally. The executable is unsigned. The tray uses a standard system icon with a Rayme tooltip; users may need to expand Windows' notification-area overflow to find it. Accent selection is a curated six-color palette, not an arbitrary color editor. Click-through is intentionally not persisted.
+No known compilation or executed-test failure remains. The actual WPF rendering/interaction and packaged pipe lifecycle are not yet executed in this Linux session; CI results must be checked externally. The executable is unsigned. The tray now uses the embedded Rayme icon and a themed WPF flyout, with a styled native menu fallback; users may need to expand Windows' notification-area overflow to find it. Accent selection is a curated six-color palette, not an arbitrary color editor. Click-through is intentionally not persisted.
 
 On the intended Windows 11 three-monitor machine:
 

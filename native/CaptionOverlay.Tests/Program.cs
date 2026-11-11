@@ -39,6 +39,8 @@ static class Program {
         Check((Luminance([224,231,242])+.05)/(background+.05)>=4.5,"Opacity floor keeps small source labels readable over a white desktop");
         Check(p.Placement?.X == -1920 && p.Placement.Y == -1080,"Negative coordinates survive settings serialization");
         Check(Preferences.Parse("{\"Version\":99}") == new Preferences(),"Unknown settings schema recovers");
+        var legacy=new Preferences{FontSize=34,BackgroundOpacity=.82,ColorA="#ABCDEF",ColorB="#BADA55",Locked=true,Topmost=false,Monitor="portrait",Placement=new(-1080,-1440,640,360)};
+        Check(Preferences.Parse(JsonSerializer.Serialize(legacy))==legacy,"Existing version-1 custom appearance and negative-coordinate placement survive the redesign unchanged");
         Check((new Preferences { FontSize = double.NaN, Placement = new(double.PositiveInfinity,0,1,1) }).Validate().Placement == null,"Invalid floating-point placement rejected");
         var dir = Path.Combine(Path.GetTempPath(),"rayme-overlay-"+Guid.NewGuid()); var file = Path.Combine(dir,"settings.json");
         try { Check(Preferences.Load(file) == new Preferences(),"Missing settings recover"); Check(p.Save(file) && Preferences.Load(file) == p,"Settings atomic round-trip"); var json = File.ReadAllText(file); Check(!json.Contains("token") && !json.Contains("caption",StringComparison.OrdinalIgnoreCase),"Settings contain no credentials or transcripts"); File.WriteAllText(file,"{bad"); Check(Preferences.Load(file) == new Preferences(),"Corrupt file recovers"); }
@@ -55,6 +57,21 @@ static class Program {
         Check(sameTime.History[0].Source == A && sameTime.History[1].Source == B,"Equal capture timestamps retain arrival order");
         sameTime.Apply("""{"type":"caption","source":{"id":"a","generation":1,"name":"Browser A","identity":"10:100"},"id":2,"final":true,"text":"fractional timestamp","capturedAt":4.5}""");
         Check(sameTime.History[0].CapturedAt == 4.5,"Sub-millisecond capture timestamps preserve intended ordering");
+        var partialRow=new Caption(A,7,false,"[laughter]",10);
+        Check(CaptionPresentation.RowKey(partialRow)==CaptionPresentation.RowKey(partialRow with{Final=true}),"Partial/final presentation retains a stable row identity");
+        Check(CaptionPresentation.RowKey(partialRow)!=CaptionPresentation.RowKey(partialRow with{Source=A with{Generation=3}}),"Replaced generations never reuse stale visual rows");
+        Check(partialRow.Key!=(partialRow with{Final=true}).Key,"Presentation identity does not change protocol deduplication semantics");
+        foreach(var (icon,display) in new[]{
+            (new Bounds(1800,1040,24,24),monitors[0]),
+            (new Bounds(200,-1470,24,24),monitors[1]),
+            (new Bounds(-1110,400,24,24),monitors[2]),
+            (new Bounds(1920,400,24,24),monitors[0]),
+            (new Bounds(-2000,-3000,24,24),monitors[1])}) {
+            var placed=FlyoutPlacement.Place(icon,286*display.Scale,360*display.Scale,display);var work=display.Work;
+            Check(placed.X>=work.X&&placed.Y>=work.Y&&placed.X+placed.Width<=work.X+work.Width&&placed.Y+placed.Height<=work.Y+work.Height,"Tray flyout clamps to visible work area for bottom/top/left/right/offscreen anchors");
+        }
+        var bottom=FlyoutPlacement.Place(new(1800,1040,24,24),286,360,monitors[0]);Check(bottom.Y+bottom.Height<1040,"Bottom taskbar opens flyout above the icon");
+        var top=FlyoutPlacement.Place(new(200,-1470,24,24),429,540,monitors[1]);Check(top.Y>=-1440,"Upper scaled monitor taskbar opens into its visible work area");
         foreach (string url in new[] { "https://127.0.0.1/?token="+new string('a',48), "http://localhost/?token="+new string('a',48), "http://example.com/?token="+new string('a',48), "http://127.0.0.1/?token=secret", "http://127.0.0.1/path?token="+new string('a',48) }) {
             bool rejected = false; try { _ = new SessionClient(url); } catch (ArgumentException) { rejected = true; } Check(rejected,"Only exact authenticated loopback sessions accepted");
         }

@@ -24,6 +24,7 @@ internal static class Program {
             } catch { MessageBox.Show("Start the overlay using START WINDOWS CAPTIONS.bat. A private local session handoff is required.", "Rayme captions"); return 1; }
         }
         var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
+        Theme.Install(app);
         var window = new OverlayWindow(client, smoke); app.MainWindow = window;
         if (!smoke) _ = Task.Run(async () => {
             // EOF on the parent's owned pipe also covers console-X or an unexpected Node exit.
