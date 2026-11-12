@@ -15,6 +15,22 @@ function Fetch-Verified($url, $file, $expected) {
 Fetch-Verified $pins.node.url "$work/node.zip" $pins.node.sha256
 Expand-Archive -Force "$work/node.zip" "$work/node"
 $node = "$work/node/node-v$($pins.node.version)-win-x64"
+# npm.ps1 reparses its caller's command and can reevaluate $PSScriptRoot in
+# the wrong scope. Invoke the pinned CLI directly and fail before compilation.
+$dependencies = (Resolve-Path "$PSScriptRoot/node").Path
+$lockFile = Join-Path $dependencies 'package-lock.json'
+if (!(Test-Path -LiteralPath $lockFile -PathType Leaf)) { throw "Missing production npm lockfile: $lockFile" }
+$lockVersion = (Get-Content -LiteralPath $lockFile -Raw | ConvertFrom-Json -AsHashtable).lockfileVersion
+$lockHash = (Get-FileHash -LiteralPath $lockFile -Algorithm SHA256).Hash
+Push-Location -LiteralPath $dependencies
+try {
+    $prefix = & "$node/node.exe" "$node/node_modules/npm/bin/npm-cli.js" prefix
+    if ($LASTEXITCODE -ne 0 -or $prefix -ine $dependencies) { throw "Unexpected production npm prefix: $prefix" }
+    Write-Host "Production npm ci: cwd=$((Get-Location).Path); prefix=$prefix; lockfile=$lockFile; lockfileVersion=$lockVersion; SHA256=$lockHash"
+    & "$node/node.exe" "$node/node_modules/npm/bin/npm-cli.js" ci --ignore-scripts --omit=dev --omit=optional --no-audit --no-fund
+    if ($LASTEXITCODE -ne 0) { throw 'Locked production dependency install failed' }
+    if ((Get-FileHash -LiteralPath $lockFile -Algorithm SHA256).Hash -cne $lockHash) { throw 'Production npm lockfile changed during ci' }
+} finally { Pop-Location }
 Fetch-Verified $pins.whisper.url "$work/whisper.tar.gz" $pins.whisper.sha256
 & tar -xzf "$work/whisper.tar.gz" -C $work
 if ($LASTEXITCODE -ne 0) { throw 'Whisper extraction failed' }
@@ -62,8 +78,6 @@ Copy-Item $cudaServer.FullName $cuda
 foreach ($dll in @('cudart64_12.dll', 'cublas64_12.dll', 'cublasLt64_12.dll')) { Copy-Item "$toolkit/bin/$dll" $cuda }
 & "$cuda/whisper-server.exe" --help
 if ($LASTEXITCODE -ne 0) { throw 'CUDA executable/DLL startup check failed (does not verify GPU inference)' }
-& npm ci --prefix "$PSScriptRoot/node" --ignore-scripts --omit=dev --omit=optional --no-audit --no-fund
-if ($LASTEXITCODE -ne 0) { throw 'Locked production dependency install failed' }
 function Publish-Native($project, $dest) {
     & dotnet restore "$repo/native/$project" -r win-x64 --locked-mode '-p:PublishSingleFile=true' "-p:RuntimeFrameworkVersion=$($pins.dotnetRuntime)"
     if ($LASTEXITCODE -ne 0) { throw "Locked native restore failed: $project" }

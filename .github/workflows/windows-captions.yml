@@ -15,7 +15,8 @@ jobs:
   portable:
     needs: [build-test, caption-overlay, speech-integration]
     runs-on: windows-2022
-    timeout-minutes: 75
+    # CUDA compilation took about 70 minutes; preserve time for all acceptance gates.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Use a temporary NuGet package directory
