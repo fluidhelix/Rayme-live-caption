@@ -25,8 +25,10 @@ $pathmap = '/pathmap:"' + $source.Replace('\','/') + '"=/_/whisper'
 # decodes UTF-8 to UTF-16. Windows' documented per-process UTF-8 code page keeps
 # argv consistent with that loader for all user/model directory names.
 $manifest = (Join-Path $PSScriptRoot 'whisper-utf8.manifest').Replace('\','/')
-$linkFlags = '/MANIFEST:EMBED /MANIFESTINPUT:"' + $manifest + '"'
-$configure += @("-DCMAKE_C_FLAGS=$pathmap", "-DCMAKE_CXX_FLAGS=$pathmap", "-DCMAKE_EXE_LINKER_FLAGS=$linkFlags")
+# CMake merges .manifest target sources for both VS and Ninja. Do not use
+# global linker flags: those also affect CUDA's temporary compiler probes.
+Add-Content -Path "$source/examples/server/CMakeLists.txt" -Encoding utf8 -Value "`ntarget_sources(whisper-server PRIVATE `"$manifest`")"
+$configure += @("-DCMAKE_C_FLAGS=$pathmap", "-DCMAKE_CXX_FLAGS=$pathmap")
 & cmake @configure
 if ($LASTEXITCODE -ne 0) { throw 'CPU Whisper configure failed' }
 & cmake --build "$work/cpu" --config Release --target whisper-server --parallel 2
@@ -46,7 +48,7 @@ foreach ($component in $pins.cuda.components.PSObject.Properties) {
     Get-ChildItem $componentRoot | Where-Object { $_.Name -ne 'LICENSE' } | ForEach-Object { Copy-Item $_.FullName $toolkit -Recurse -Force }
 }
 $cudaConfigure = @('-S', $source, '-B', "$work/cuda-build", '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_POLICY_VERSION_MINIMUM=3.10', '-DCMAKE_POLICY_DEFAULT_CMP0091=NEW', '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded', "-DCMAKE_CUDA_COMPILER=$toolkit/bin/nvcc.exe", "-DCUDAToolkit_ROOT=$toolkit", '-DCMAKE_CUDA_ARCHITECTURES=86;89', '-DGGML_NATIVE=OFF', '-DGGML_CUDA=ON', '-DGGML_CUDA_NO_VMM=ON', '-DGGML_OPENMP=OFF', '-DGGML_AVX=OFF', '-DGGML_AVX2=OFF', '-DGGML_FMA=OFF', '-DGGML_F16C=OFF', '-DWHISPER_BUILD_TESTS=OFF', '-DWHISPER_CURL=OFF')
-$cudaConfigure += @("-DCMAKE_C_FLAGS=$pathmap", "-DCMAKE_CXX_FLAGS=$pathmap", "-DCMAKE_CUDA_FLAGS=-Xcompiler=$pathmap", "-DCMAKE_EXE_LINKER_FLAGS=$linkFlags")
+$cudaConfigure += @("-DCMAKE_C_FLAGS=$pathmap", "-DCMAKE_CXX_FLAGS=$pathmap", "-DCMAKE_CUDA_FLAGS=-Xcompiler=$pathmap")
 & cmake @cudaConfigure
 if ($LASTEXITCODE -ne 0) { throw 'CUDA Whisper configure failed' }
 & cmake --build "$work/cuda-build" --target whisper-server --parallel 2
@@ -86,6 +88,19 @@ $options = @{ repo=$repo; out=$package; launcher="$work/launcher/Rayme.exe"; ove
 $options | ConvertTo-Json | Set-Content "$work/assemble.json" -Encoding utf8
 & node "$PSScriptRoot/assemble.js" "$work/assemble.json"
 if ($LASTEXITCODE -ne 0) { throw 'Package allowlist/integrity validation failed' }
+# Inspect the actual packaged PE resources; a sidecar manifest is not sufficient.
+foreach ($kind in @('cpu', 'cuda')) {
+    $embedded = "$work/$kind-server.embedded.manifest"
+    & mt.exe "-inputresource:$package/App/whisper/$kind/whisper-server.exe;#1" "-out:$embedded"
+    if ($LASTEXITCODE -ne 0) { throw "Could not extract packaged $kind Whisper manifest" }
+    $document = [System.Xml.XmlDocument]::new()
+    $document.Load($embedded)
+    $namespaces = [System.Xml.XmlNamespaceManager]::new($document.NameTable)
+    $namespaces.AddNamespace('ws', 'http://schemas.microsoft.com/SMI/2019/WindowsSettings')
+    $codePages = @($document.SelectNodes('//ws:activeCodePage', $namespaces))
+    if ($codePages.Count -ne 1 -or $codePages[0].InnerText.Trim() -cne 'UTF-8') { throw "Packaged $kind Whisper is missing its UTF-8 activeCodePage" }
+    Write-Host "PASS packaged $kind whisper-server RT_MANIFEST/#1 activeCodePage=UTF-8"
+}
 $zip = "$output/Rayme-Smart-Live-Captions-v$($pins.version)-win-x64.zip"
 Compress-Archive -Path $package -DestinationPath $zip
 $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
