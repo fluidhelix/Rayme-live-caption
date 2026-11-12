@@ -39,6 +39,15 @@ internal sealed partial class OverlayWindow : Window {
     bool syncing, restoring, closing, clickThrough;
     string connectionText = "Connecting…";
     IntPtr handle;
+    internal string ExitCapability="";
+    bool quitRequested, backendClosed;
+    internal void BackendClosed(){backendClosed=true;Close();}
+    void QuitRayme(){
+        if(quitRequested)return;quitRequested=true;
+        if(backendClosed||smoke){Close();return;}
+        Console.Out.WriteLine(JsonSerializer.Serialize(new{type="quit-rayme",capability=ExitCapability}));Console.Out.Flush();
+        connectionText="Closing Rayme — stopping audio and speech recognition…";UpdateConnection();
+    }
     public bool SmokePassed { get; private set; }
     static SolidColorBrush Brush(string color) => new((Color)ColorConverter.ConvertFromString(color));
     static Button Action(string text, RoutedEventHandler handler) => Theme.Button(text,handler);
@@ -68,14 +77,16 @@ internal sealed partial class OverlayWindow : Window {
         };
         LocationChanged += (_,_) => ScheduleSave(); SizeChanged += (_,_) => ScheduleSave();
         Loaded += async (_,_) => {
+#if !RAYME_DISTRIBUTION
             if (smoke) { await SmokeAsync(); return; }
+#endif
             CreateTray(); ApplyAppearance(); Render();
             Console.Out.WriteLine("{\"type\":\"overlay-ready\"}"); // Control acknowledgement only; no credentials or captions.
             if (client != null) await RunClient();
         };
-        Closing += (_,_) => { closing = true; saveTimer.Stop(); displayTimer.Stop(); if (!smoke) Save(); };
+        Closing += (_,e) => { if(!smoke&&!backendClosed){e.Cancel=true;QuitRayme();return;} closing = true; saveTimer.Stop(); displayTimer.Stop(); if (!smoke) Save(); };
         Closed += async (_,_) => {
-            controls?.Close(); tray?.Dispose(); if (client != null) await client.DisposeAsync();
+            controls?.Close(); setupWindow?.Close(); tray?.Dispose(); if (client != null) await client.DisposeAsync();
         };
     }
     IntPtr WindowMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled) {
@@ -125,11 +136,11 @@ internal sealed partial class OverlayWindow : Window {
         new(prefs.Locked ? "Unlock position" : "Lock position", "\uE72E", () => Change(prefs with { Locked=!prefs.Locked })),
         new("Disable click-through", "\uE8B0", () => { Through(false); Reveal(); }),
         new("Restore to primary monitor", "\uE9E9", () => { Change(prefs with { Locked=false }); Reveal(); Recover(true); }),
-        new("Exit overlay", "\uE8BB", Close)
+        new("Quit Rayme", "\uE8BB", QuitRayme)
     ];
     async Task RunClient() {
-        try { await client!.RunAsync(json => Dispatcher.InvokeAsync(() => { state.Apply(json); Render(); UpdateSettings(); }).Task,
-            status => Dispatcher.InvokeAsync(() => { connectionText = status; UpdateConnection(); }).Task); }
+        try { await client!.RunAsync(json => Dispatcher.InvokeAsync(() => { state.Apply(json);HandleSetup(json);HandleProcessing(json);Render();UpdateSettings(); }).Task,
+            status => Dispatcher.InvokeAsync(() => { if(!quitRequested){connectionText = status;UpdateConnection();} }).Task); }
         catch { if (!closing) { connectionText = "Caption connection failed. Restart Windows caption mode."; UpdateConnection(); } }
     }
     void UpdateConnection() {
@@ -137,7 +148,7 @@ internal sealed partial class OverlayWindow : Window {
         bool error=connectionText.Contains("lost",StringComparison.OrdinalIgnoreCase)||connectionText.Contains("failed",StringComparison.OrdinalIgnoreCase)||connectionText.Contains("not sent",StringComparison.OrdinalIgnoreCase);
         connection.Foreground=Theme.Brush(error?"#FFD0D5":state.Paused||connectionText.StartsWith("Connecting",StringComparison.Ordinal)?"#FBE0A7":"#BBE6D8");
         if(backendStatus!=null){
-            string message=connectionText=="Connected"?state.Status:connectionText;backendStatus.Text=message;
+            string message=setupRequired&&setupState is {} setup?setup.GetProperty("message").GetString()??"Complete speech setup.":connectionText=="Connected"?state.Status:connectionText;backendStatus.Text=message;
             bool noticeError=error||message.Contains("failed",StringComparison.OrdinalIgnoreCase)||message.Contains("could not",StringComparison.OrdinalIgnoreCase)||message.Contains("unavailable",StringComparison.OrdinalIgnoreCase);
             statusCard!.Background=Theme.Brush(noticeError?"#3A2431":"#1B2D3D");
         }
@@ -160,7 +171,9 @@ internal sealed partial class OverlayWindow : Window {
         if (follow) scroll.ScrollToEnd();
     }
     async Task Send(object command) {
+#if !RAYME_DISTRIBUTION
         if(smoke){smokeCommands.Add(JsonSerializer.Serialize(command));return;}
+#endif
         if (client == null || !await client.SendAsync(command)) { connectionText = "Control not sent — connection unavailable or busy. Please retry."; UpdateConnection(); }
     }
     void UpdateSettings() {

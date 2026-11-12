@@ -1,5 +1,7 @@
 # Rayme Phase 3 — modern UI refinement
 
+Phase 4 supersedes the historical distribution and exit/browser-fallback behavior below. See [PHASE4_REPORT.md](PHASE4_REPORT.md) for Rayme.exe, official prereleases, explicit Quit Rayme and Auto/CUDA/CPU processing.
+
 Starting commit: `c1f6366ba4057451f9ff5587f58f097847b1d9e0`, fetched and fast-forward checked on `feature/windows-loopback-captions`. This continues draft PR #1; no merge is performed.
 
 The user reported successful physical Windows testing of the previous native overlay with live synthetic captions, including dragging, resizing, translucency and caption presentation. That is baseline functionality evidence. It is **not** a visual or physical test of this redesign.

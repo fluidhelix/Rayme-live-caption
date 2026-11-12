@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
+    <AssemblyName>Rayme</AssemblyName><Version>1.0.0</Version><ApplicationIcon>../CaptionOverlay/Assets/Rayme.ico</ApplicationIcon>
+  </PropertyGroup>
+</Project>

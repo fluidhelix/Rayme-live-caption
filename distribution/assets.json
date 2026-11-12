@@ -1,0 +1,49 @@
+{
+  "version": "1.0.0",
+  "dotnetSdk": "10.0.404",
+  "dotnetRuntime": "10.0.15",
+  "node": {
+    "version": "22.23.5",
+    "url": "https://nodejs.org/dist/v22.23.5/node-v22.23.5-win-x64.zip",
+    "sha256": "4a191082e9706866830379d577d2cc8a50c776fcd9436a8d061b063ed0d9a0e3"
+  },
+  "whisper": {
+    "commit": "d1be6fde11ac6e0407606b4e42fe72d34add8037",
+    "url": "https://codeload.github.com/ggml-org/whisper.cpp/tar.gz/d1be6fde11ac6e0407606b4e42fe72d34add8037",
+    "sha256": "645445da884df6dbd52b30f82d7be7c01d1767c938714e477e786b88d529e9f4"
+  },
+  "modelLicense": {
+    "url": "https://raw.githubusercontent.com/openai/whisper/86098128c0b4f24f0e2aa2994de830614b474227/LICENSE",
+    "sha256": "b5d65a59060e68c4ff940e1eddfa6f94b2d68fdf58ed7f4dd57721c997e35e9d"
+  },
+  "cuda": {
+    "version": "12.8.1",
+    "minimumWindowsDriver": "572.61",
+    "architectures": [
+      "86",
+      "89"
+    ],
+    "components": {
+      "cuda_nvcc": {
+        "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_nvcc/windows-x86_64/cuda_nvcc-windows-x86_64-12.8.93-archive.zip",
+        "sha256": "9fdc70b4271ed9aad4d64cd7076a7d96ec36512d074b9995fe638de669197391",
+        "bytes": 120912792
+      },
+      "cuda_cudart": {
+        "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-12.8.90-archive.zip",
+        "sha256": "4a39058fd8519444a81cfc7ae055d136f48d1a31ffa41ae255b35b2edd61e13b",
+        "bytes": 3037735
+      },
+      "cuda_cccl": {
+        "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cccl/windows-x86_64/cuda_cccl-windows-x86_64-12.8.90-archive.zip",
+        "sha256": "bd8548fa1ae82f92910bebc3079e14bd58c5a92aa64596d46bd610a478cb39d7",
+        "bytes": 2911311
+      },
+      "libcublas": {
+        "url": "https://developer.download.nvidia.com/compute/cuda/redist/libcublas/windows-x86_64/libcublas-windows-x86_64-12.8.4.1-archive.zip",
+        "sha256": "57a470112cec7e112c95253dde8b3c7184d795dbd92b0bde77a4cb7f8c94c8aa",
+        "bytes": 563660944
+      }
+    }
+  }
+}

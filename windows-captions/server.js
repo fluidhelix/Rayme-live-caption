@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomBytes } = require('node:crypto');
 const { WebSocketServer, WebSocket } = require('ws');
-async function createUI({ port = 8090, onSelect, onRefresh, onConfigure, onPause }) {
+async function createUI({ port = 8090, onSelect, onRefresh, onConfigure, onPause, onSetup }) {
   const token = randomBytes(24).toString('hex');
   const state = { type: 'snapshot', status: 'Starting local speech recognition…', history: [], partial: null, devices: [], apps: [], sources: {}, partials: {}, paused: false };
   const server = http.createServer((req, res) => {
@@ -29,6 +29,8 @@ async function createUI({ port = 8090, onSelect, onRefresh, onConfigure, onPause
     if (event.type === 'paused') state.paused = event.paused;
     if (event.type === 'cleared') { state.history = []; state.partials = {}; state.partial = null; }
     if (event.type === 'status') state.status = event.message;
+    if (event.type === 'setup') state.setup = event;
+    if (event.type === 'processing') state.processing = event;
     if (event.type === 'devices') { state.devices = event.devices; state.selected = event.selected; }
     if (event.type === 'reset') { if (source) { delete state.partials[source.id]; state.sources[source.id] = { type: 'source-status', source, state: 'waiting', message: 'Waiting for audio' }; } else state.partial = null; }
     if (event.type === 'caption') {
@@ -45,6 +47,7 @@ async function createUI({ port = 8090, onSelect, onRefresh, onConfigure, onPause
         const act = p => Promise.resolve(p).catch(e => publish({ type: 'status', message: e.message || 'Control failed.' }));
         if (msg.type === 'clear') publish({ type: 'cleared' });
         if (msg.type === 'pause' && typeof msg.paused === 'boolean') act(onPause?.(msg.paused));
+        if (msg.type === 'setup' && ['select','download','retry','mode'].includes(msg.action) && (msg.path === undefined || typeof msg.path === 'string' && msg.path.length <= 4096)) act(onSetup?.(msg));
         if (msg.type === 'configure' && ['a','b','device'].includes(msg.slot)) {
           let descriptor = null;
           if (msg.enabled === true) {

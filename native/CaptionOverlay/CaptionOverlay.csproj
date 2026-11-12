@@ -8,6 +8,8 @@
     <!-- WPF owns DPI awareness via the manifest; WinForms is used only for NotifyIcon. -->
     <NoWarn>$(NoWarn);WFO0003</NoWarn>
   </PropertyGroup>
+  <PropertyGroup Condition="'$(RaymeDistribution)' == 'true'"><DefineConstants>$(DefineConstants);RAYME_DISTRIBUTION</DefineConstants></PropertyGroup>
   <ItemGroup><ProjectReference Include="../CaptionOverlay.Core/CaptionOverlay.Core.csproj" /></ItemGroup>
   <ItemGroup><Resource Include="Assets/Rayme.ico" /></ItemGroup>
+  <ItemGroup Condition="'$(RaymeDistribution)' == 'true'"><Compile Remove="OverlayWindow.Smoke.cs" /></ItemGroup>
 </Project>

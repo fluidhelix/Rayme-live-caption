@@ -162,4 +162,13 @@
     <Setter Property="Foreground" Value="{StaticResource TextBrush}"/><Setter Property="MaxWidth" Value="320"/><Setter Property="FontSize" Value="12"/>
     <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ToolTip"><Border Background="#233247" BorderBrush="#617895" BorderThickness="1" CornerRadius="8" Padding="12,8"><TextBlock Text="{TemplateBinding Content}" TextWrapping="Wrap"/></Border></ControlTemplate></Setter.Value></Setter>
   </Style>
+  <Style TargetType="TextBox">
+    <Setter Property="Foreground" Value="{StaticResource TextBrush}"/><Setter Property="Background" Value="#131C2B"/>
+    <Setter Property="CaretBrush" Value="White"/><Setter Property="SelectionBrush" Value="#3477A3"/><Setter Property="BorderBrush" Value="#637B98"/><Setter Property="Padding" Value="10,8"/>
+    <Setter Property="FocusVisualStyle" Value="{StaticResource KeyboardFocus}"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="TextBox"><Border CornerRadius="8" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" Padding="{TemplateBinding Padding}"><ScrollViewer x:Name="PART_ContentHost"/></Border></ControlTemplate></Setter.Value></Setter>
+  </Style>
+  <Style TargetType="ProgressBar">
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="ProgressBar"><Grid x:Name="PART_Track"><Border Background="#344358" CornerRadius="4"/><Border x:Name="PART_Indicator" Background="#91D9FF" HorizontalAlignment="Left" CornerRadius="4"/></Grid></ControlTemplate></Setter.Value></Setter>
+  </Style>
 </ResourceDictionary>

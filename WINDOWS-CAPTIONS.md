@@ -1,5 +1,11 @@
 # Windows playback captions
 
+## End-user portable application (Phase 4)
+
+Use the official [GitHub Releases](https://github.com/fluidhelix/Rayme-live-caption/releases) prerelease ZIP, `Rayme-Smart-Live-Captions-v1.0.0-win-x64.zip`, and its `SHA256SUMS.txt`. Extract the whole folder and double-click **Rayme.exe**. It bundles Node/.NET/native helpers and CPU/CUDA runtimes; native Speech setup handles the model. Auto prefers a compatible NVIDIA RTX 30/40 GPU (including RTX 4080), otherwise CPU. Actual acceleration is reported separately from the mode selection. Quit Rayme stops everything without opening Chrome.
+
+See [PHASE4_REPORT.md](PHASE4_REPORT.md) for current build/publication evidence, licensing and clean Windows acceptance. Windows/package/GPU results must not be inferred from a Linux cross-build. The older artifact/Node/batch instructions below describe the **developer checkout**, not the friend-ready Release package.
+
 This adds an independent, local accessibility mode for conversations and vocal reactions in **any Windows playback audio**. `index.js`, `indexold.js`, `overlay.html`, and `START CAPTIONS.bat` are unchanged. The new mode never initializes Discord or needs its token. Mixed output has no reliable speaker identification; simultaneous voices, music and game sounds can reduce recognition accuracy.
 
 ## Phase 2 — application-aware mode

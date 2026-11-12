@@ -1,5 +1,7 @@
 # Phase 3 — native floating caption overlay
 
+Phase 4 supersedes the historical distribution and exit/browser-fallback behavior below. See [PHASE4_REPORT.md](PHASE4_REPORT.md) for Rayme.exe, official prereleases, explicit Quit Rayme and Auto/CUDA/CPU processing.
+
 The modern UI refinement supersedes the initial visual design described below. See [UI_REFINEMENT_REPORT.md](UI_REFINEMENT_REPORT.md) for the shared component system, redesigned Controls/tray, stable partial/final typography and current validation.
 
 Baseline: `75f359784fe53eebb09995f355fcf08b20c48cf4`, fetched from `feature/windows-loopback-captions` before implementation. Work remains on that branch and draft PR #1; no merge into `main` is authorized or performed. The implementation commit is identified in the final handoff and the Actions run's commit link.

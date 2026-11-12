@@ -1,0 +1,30 @@
+name: Publish validated Rayme prerelease
+on:
+  workflow_call:
+    inputs:
+      gpu_verified:
+        type: boolean
+        default: false
+permissions:
+  contents: write
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/feature/windows-loopback-captions' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: Rayme-Smart-Live-Captions-win-x64
+          path: release-assets
+      - name: Publish annotated acceptance tag and prerelease only after package validation
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        env:
+          RAYME_GPU_VERIFIED: ${{ inputs.gpu_verified }}
+        with:
+          script: |
+            const publish = require('./distribution/publish-prerelease.cjs');
+            const url = await publish({github, context, directory:'release-assets', gpuVerified:process.env.RAYME_GPU_VERIFIED==='true'});
+            core.summary.addLink('Official Rayme acceptance prerelease', url).write();

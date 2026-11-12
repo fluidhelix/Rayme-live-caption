@@ -6,10 +6,11 @@ const net = require('node:net');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { WebSocket } = require('ws');
-const { Segmenter } = require('../../windows-captions/audio');
-const { SourceScheduler } = require('../../windows-captions/sources');
-const { Whisper } = require('../../windows-captions/whisper');
-const { createUI } = require('../../windows-captions/server');
+const productionRoot=process.env.RAYME_TEST_BACKEND||path.join(__dirname,'../../windows-captions');
+const { Segmenter } = require(path.join(productionRoot,'audio'));
+const { SourceScheduler } = require(path.join(productionRoot,'sources'));
+const { Whisper } = require(path.join(productionRoot,'whisper'));
+const { createUI } = require(path.join(productionRoot,'server'));
 const { readSpeech,report } = require('./common');
 async function speechE2E(runtime, output) {
   const rows=[]; let whisper,ui,scheduler,ws,startupDiagnostics,runtimeDiagnostics;

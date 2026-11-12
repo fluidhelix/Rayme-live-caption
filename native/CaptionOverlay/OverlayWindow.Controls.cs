@@ -48,6 +48,7 @@ internal sealed partial class OverlayWindow {
             select.SelectionChanged+=(sender,e)=>{if(enabled.IsChecked==true)Configure(sender,e);};
         }
         sourceStatus=Theme.Text("",12,"#B9C7DC");sourceStatus.Margin=new Thickness(2,0,2,0);panel.Children.Add(sourceStatus);
+        Section(panel,"\uE950","Speech processing","Choose Auto, NVIDIA GPU (CUDA), or CPU. Actual device and verification are reported separately.");AddProcessingControls(panel);
         Section(panel,"\uE8D2","Caption appearance","A comfortable reading size and clear source accents, independent of the window’s size.");
         var sliders=new StackPanel();
         fontControl=Range(sliders,"Caption text size",16,60,prefs.FontSize,n=>{if(!syncing)Change(prefs with{FontSize=n});},false);
@@ -82,6 +83,7 @@ internal sealed partial class OverlayWindow {
         pauseButton=Theme.Button(state.Paused?"Resume capture":"Pause capture",async(_,_)=>await Send(new{type="pause",paused=!state.Paused}),style:"PrimaryButton");pauseButton.Name="PauseCapture";session.Children.Add(pauseButton);
         var clear=Theme.Button("Clear history",async(_,_)=>await Send(new{type="clear"}),"\uE74D");clear.Name="ClearHistory";clear.ToolTip="Remove caption history from all connected windows";session.Children.Add(clear);
         var refresh=Theme.Button("Refresh availability",async(_,_)=>await Send(new{type="refresh"}),"\uE72C");refresh.Name="RefreshAvailability";session.Children.Add(refresh);panel.Children.Add(Theme.Card(session));
+        panel.Children.Add(Theme.Button("Speech model setup",(_,_)=>OpenSetup(),"\uE713"));
         panel.Children.Add(Theme.Text("Saved automatically on this PC. Captions, audio and session credentials are never saved.",12,"#B9C7DC"));
         UpdateSettings();controls.Show();
     }

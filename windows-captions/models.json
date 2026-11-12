@@ -1,0 +1,16 @@
+{
+  "models": [
+    {
+      "id": "large-v3-turbo",
+      "name": "Large-v3-Turbo (recommended quality)",
+      "file": "ggml-large-v3-turbo.bin",
+      "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+      "sha1": "4af2b29d7ec73d781377bfd1758ca957a807e941",
+      "approxBytes": 1625000000,
+      "maxBytes": 2000000000,
+      "requiredDiskBytes": 2200000000,
+      "license": "MIT — OpenAI Whisper weights; ggml conversion by whisper.cpp",
+      "hashSource": "https://github.com/ggml-org/whisper.cpp/blob/d1be6fde11ac6e0407606b4e42fe72d34add8037/models/README.md"
+    }
+  ]
+}

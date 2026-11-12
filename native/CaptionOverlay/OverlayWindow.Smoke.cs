@@ -83,7 +83,7 @@ internal sealed partial class OverlayWindow {
             controls.Close();
             menu=new TrayFlyout(BuildTrayActions());var display=DesktopPlacement.Displays().First();menu.ShowAt(new(display.Work.X+display.Work.Width-40,display.Work.Y+display.Work.Height,24,24));await Task.Delay(100);
             UiCheck(menu.ActionCount==6&&menu.FirstAction.FocusVisualStyle!=null,"Tray flyout contains all six recovery actions and focus styling");Capture(menu,Path.Combine(output,"tray-flyout.png"));
-            var end=new KeyEventArgs(Keyboard.PrimaryDevice,PresentationSource.FromVisual(menu),0,Key.End){RoutedEvent=PreviewKeyDownEvent};menu.RaiseEvent(end);UiCheck(end.Handled&&menu.FocusedAction=="Exit overlay","Tray End key focuses the last menu action");
+            var end=new KeyEventArgs(Keyboard.PrimaryDevice,PresentationSource.FromVisual(menu),0,Key.End){RoutedEvent=PreviewKeyDownEvent};menu.RaiseEvent(end);UiCheck(end.Handled&&menu.FocusedAction=="Quit Rayme","Tray End key focuses the last menu action");
             var down=new KeyEventArgs(Keyboard.PrimaryDevice,PresentationSource.FromVisual(menu),0,Key.Down){RoutedEvent=PreviewKeyDownEvent};menu.RaiseEvent(down);UiCheck(down.Handled&&menu.FocusedAction=="Show overlay","Tray arrow navigation wraps to the first action");
             menu.Close();menu=null;
             using(var fallback=TrayIcon.FallbackMenu(BuildTrayActions()))UiCheck(fallback.Items.Count==6&&fallback.Items[3].Text=="Disable click-through"&&fallback.Items[4].Text=="Restore to primary monitor","Native fallback retains every recovery action");

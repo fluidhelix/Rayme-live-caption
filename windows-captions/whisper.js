@@ -4,6 +4,7 @@ const path = require('node:path');
 const net = require('node:net');
 const { spawn } = require('node:child_process');
 const { wav } = require('./audio');
+const { RuntimeDeviceParser } = require('./runtime-device');
 function resolveRuntime(env = process.env, root = process.cwd()) {
   const walk = (dir, depth = 0) => depth > 3 || !fs.existsSync(dir) ? [] : fs.readdirSync(dir, { withFileTypes: true }).flatMap(e => e.isDirectory() ? walk(path.join(dir, e.name), depth + 1) : [path.join(dir, e.name)]);
   const files = walk(path.join(root, 'whisper'));
@@ -39,7 +40,7 @@ async function stopChild(child) {
   });
 }
 class Whisper {
-  constructor(runtime, env = process.env, { testOnlyStartupDiagnostics } = {}) { this.runtime = runtime; this.env = env; this.testOnlyStartupDiagnostics = testOnlyStartupDiagnostics; this.port = Number(env.WHISPER_PORT || 8178); this.url = `http://127.0.0.1:${this.port}`; this.abort = new AbortController(); }
+  constructor(runtime, env = process.env, { testOnlyStartupDiagnostics, onRuntimeDevice } = {}) { this.runtime = runtime; this.env = env; this.testOnlyStartupDiagnostics = testOnlyStartupDiagnostics; this.onRuntimeDevice=onRuntimeDevice; this.port = Number(env.WHISPER_PORT || 8178); this.url = `http://127.0.0.1:${this.port}`; this.abort = new AbortController(); }
   async start(status) {
     // Refuse another process on the port; never mistake an unrelated server for our child.
     await new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', () => reject(new Error(`Port ${this.port} is busy. Close the other caption mode first.`))); s.listen(this.port, '127.0.0.1', () => s.close(resolve)); });
@@ -52,6 +53,7 @@ class Whisper {
     // Production never retains diagnostics, and inference output is never captured.
     const diagnose = typeof this.testOnlyStartupDiagnostics === 'function';
     let capturing = diagnose, stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), spawnError;
+    const device=this.onRuntimeDevice?new RuntimeDeviceParser():null;let observing=!!device;
     const append = (previous, chunk) => Buffer.concat([previous, chunk.subarray(0, 8192)]).subarray(0, 8192);
     this.child = spawn(exe, args, { cwd: dir, windowsHide: true, env: { ...process.env, ...this.env, PATH: dir + path.delimiter + process.env.PATH }, stdio: ['ignore', diagnose ? 'pipe' : 'ignore', 'pipe'] });
     const closed = new Promise(resolve => this.child.once('close', resolve));
@@ -59,9 +61,10 @@ class Whisper {
     this.child.on('error', error => { spawnError = error.code; this.failed = true; status('Could not start Whisper. Check executable and runtime DLLs.'); });
     this.child.on('exit', () => { this.failed = true; status('Whisper stopped. Restart captions after checking the local installation.'); });
     this.child.stdout?.on('data', chunk => { if (capturing) stdout = append(stdout, chunk); });
-    this.child.stderr.on('data', chunk => { if (capturing) stderr = append(stderr, chunk); });
+    this.child.stderr.on('data', chunk => { if (capturing) stderr = append(stderr, chunk);if(observing)device.feed(chunk); });
     try {
       await waitReady(this.url, () => !this.failed && this.child.exitCode === null, { signal: this.abort.signal });
+      if(device)this.onRuntimeDevice(device.finish());
     } catch (error) {
       // 'close' follows exit and the final pipe data, including Windows loader errors.
       if (this.failed || this.child.exitCode !== null || this.child.signalCode) await closed;
@@ -70,7 +73,7 @@ class Whisper {
         exitCode: this.child.exitCode, signal: this.child.signalCode, spawnError,
         stdout: stdout.toString('utf8'), stderr: stderr.toString('utf8'), limitBytesPerStream: 8192 });
       throw error;
-    } finally { capturing = false; stdout = stderr = Buffer.alloc(0); }
+    } finally { capturing = false;observing=false; stdout = stderr = Buffer.alloc(0); }
   }
   async infer(pcm, signal) {
     const body = new FormData(); body.set('file', new Blob([wav(pcm)], { type: 'audio/wav' }), 'audio.wav');
