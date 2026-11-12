@@ -3,7 +3,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const {SourceScheduler,SourceManager}=require('../windows-captions/sources');
 const {Segmenter}=require('../windows-captions/audio');
-const {SegmentLedger}=require('../windows-captions/caption-lifecycle');
+const {SegmentLedger,sourceHealth}=require('../windows-captions/caption-lifecycle');
 const {createUI}=require('../windows-captions/server');
 const {WebSocket}=require('ws');
 const tick=()=>new Promise(r=>setImmediate(r));
@@ -114,4 +114,16 @@ test('shutdown aborts the owned request, removes timers and cannot publish a lat
 });
 test('retired queued work does not consume an inference call or block another source',async()=>{
  const f=fixture();try{f.q.add(A,f.job(1));f.q.add(B,f.job(1,false));f.q.retire(B,2,'A newer segment was rejected');f.calls.shift().resolve('A');await tick();assert.equal(f.calls.length,0);assert.equal(f.q.sources.get('b').partial,null);assert.equal(f.captions().length,1);assert.equal(f.clock.timers.size,0);}finally{f.q.close();}
+});
+
+test('source health prefers detected speech over stale inference waiting without masking failures',()=>{
+ let health=sourceHealth(null,{component:'inference',state:'waiting',message:'Audio processed; no recognizable speech.',recovered:true});
+ health=sourceHealth(health,{component:'capture',state:'capturing',message:'Capture active — speech detected.'});
+ assert.equal(health.state,'capturing');assert.match(health.message,/speech detected/);
+ health=sourceHealth(health,{component:'inference',state:'unavailable',message:'Local transcription failed.'});
+ assert.equal(health.state,'unavailable');
+ health=sourceHealth(health,{component:'capture',state:'capturing',message:'Capture active — speech detected.'});
+ assert.equal(health.state,'unavailable','active capture must not hide inference failure');
+ health=sourceHealth(health,{component:'inference',state:'waiting',message:'Audio processed; no recognizable speech.',recovered:true});
+ assert.equal(health.state,'capturing','successful inference recovery restores current capture activity');
 });
