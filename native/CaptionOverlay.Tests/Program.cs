@@ -12,6 +12,7 @@ static class Program {
     }
     static void UnitTests() {
         LifecycleTests();
+        UsabilityTests();
         var s = new CaptionState(); s.Apply(Event("reset",A)); s.Apply(Event("reset",B));
         s.Apply(Event("caption",A,text:"[laughter]")); s.Apply(Event("caption",B,text:"*coughing*"));
         Check(s.Partials.Count == 2,"Independent partials");
@@ -76,6 +77,28 @@ static class Program {
         foreach (string url in new[] { "https://127.0.0.1/?token="+new string('a',48), "http://localhost/?token="+new string('a',48), "http://example.com/?token="+new string('a',48), "http://127.0.0.1/?token=secret", "http://127.0.0.1/path?token="+new string('a',48) }) {
             bool rejected = false; try { _ = new SessionClient(url); } catch (ArgumentException) { rejected = true; } Check(rejected,"Only exact authenticated loopback sessions accepted");
         }
+    }
+    static void UsabilityTests(){
+        foreach(var (input,expected) in new[]{("Hello","Hello."),("Why?","Why?"),("Yes!","Yes!"),("Already.","Already."),("[laughter]","[laughter]"),("*sighing*","*sighing*"),("  More words  ","More words."),("He said “yes”","He said “yes.”"),("你好。","你好。"),("",""),("Wait…","Wait…"),("Hello [laughter]","Hello. [laughter]"),("Why? *sighing*","Why? *sighing*"),("[laughter] *sighing*","[laughter] *sighing*")})Check(TranscriptPresentation.Finish(input)==expected,"Natural final punctuation: "+input);
+        var state=new CaptionState();state.Apply(Event("reset",A));
+        Check(TranscriptPresentation.Slots(state).SequenceEqual(new[]{"a","b"}),"Even one application reserves both fixed transcript panels");
+        state.Apply(Event("caption",A,1,text:"First draft"));Check(TranscriptPresentation.Build(state,"a").PartialText=="First draft","Partial occupies the live tail of its own panel");
+        state.Apply(Event("caption",A,1,true,"First sentence"));state.Apply(Event("caption",A,2,text:"Second draft"));
+        var text=TranscriptPresentation.Build(state,"a");Check(text.FinalText=="First sentence."&&text.PartialText=="Second draft","Final text and current partial are continuous, independent runs without duplication");
+        state.Apply(Event("caption",A,2,true,"Second sentence?"));state.Apply(Event("reset",A with{Generation=3}));state.Apply("""{"type":"paused","paused":true}""");
+        Check(TranscriptPresentation.Build(state,"a").FinalText=="First sentence. Second sentence?"&&!TranscriptPresentation.Build(state,"a").Live,"Silence, reset and pause preserve naturally joined finalized history");
+        Check(TranscriptPresentation.Build(state,"b").FinalText.Length==0,"Other application transcript remains independent");
+        state.Apply(Event("source-removed",A with{Generation=3}));var device=new Source("device",4,"Default output","default");state.Apply(Event("reset",device));
+        Check(TranscriptPresentation.Slots(state).SequenceEqual(new[]{"device"}),"Whole-device fallback occupies one full panel");
+        var a=new ScrollFollow();var b=new ScrollFollow();a.ReaderMoved(20,500);b.ReaderMoved(450,500);Check(!a.Following&&b.Following,"Each transcript maintains independent follow intent");long version=a.Revision;a.ReaderMoved(450,500);Check(a.Revision>version,"Reader navigation invalidates pending follow operations");Check(a.Following,"Near-bottom reading resumes follow within 60 DIPs");
+        Check(WindowInteraction.LockGlyph(true)=="\uE72E"&&WindowInteraction.LockGlyph(false)=="\uE785","Closed padlock indicates locked and open padlock indicates unlocked");
+        Check(WindowInteraction.LockAction(true).StartsWith("Unlock")&&WindowInteraction.LockHint(true).Contains("locked"),"Lock actions and hints agree with actual state");
+        foreach(string phase in new[]{"checking","downloading","verifying","loading","switching","choose","error","ready"}){
+            using var json=JsonDocument.Parse(JsonSerializer.Serialize(new{phase,required=phase!="ready",message="detail",activeModel=phase=="ready"?new{name="Turbo"}:null,selectedModel=new{name="candidate"}}));
+            var view=SpeechSetupView.Read(json.RootElement);Check(view.Busy==(phase is "checking" or "downloading" or "verifying" or "loading" or "switching"),"Setup busy-state gating: "+phase);Check(view.Ready==(phase=="ready")&&view.SelectedModel=="candidate","Only validated ready model is active: "+phase);
+        }
+        state.Apply(Event("source-status",device));state.Apply(JsonSerializer.Serialize(new{type="audio-level",source=new{id=device.Id,generation=device.Generation,name=device.Name,identity=device.Identity},rms=20,dbfs=-64,low=true}));
+        Check(state.AudioLevels["device"].Low&&state.AudioLevels["device"].Dbfs==-64,"Audio level metadata reaches presentation independently of captions");state.Apply(Event("reset",device with{Generation=5}));Check(state.AudioLevels.Count==0,"Reset clears obsolete signal meters");
     }
     static void LifecycleTests(){
         string Life(string type,Source source,long id,long revision,bool final=false,string text="words",bool terminal=true)=>JsonSerializer.Serialize(new{type,source=new{id=source.Id,generation=source.Generation,name=source.Name,identity=source.Identity},id,revision,final,text,terminal,capturedAt=id});

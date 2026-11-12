@@ -23,10 +23,10 @@ internal sealed partial class OverlayWindow {
         if(controls!=null){controls.Show();controls.Activate();return;}
         var panel=new StackPanel { Margin=new Thickness(24,0,24,24) };
         controls=new ModernWindow("Controls","Make room for every conversation",panel) { Owner=this,Width=500,Height=800,MinWidth=400,MinHeight=400 };
-        controls.Closed+=(_,_)=>{controls=null;selectors.Clear();colorControls.Clear();fontControl=opacityControl=null;};
+        controls.Closed+=(_,_)=>{controls=null;selectors.Clear();colorControls.Clear();fontControl=opacityControl=null;processingChoices.Clear();processingLabels.Clear();};
         backendStatus=Theme.Text(state.Status,12,"#D5E5F5");Theme.Accessible(backendStatus,"Caption session status");
         statusCard=Theme.Card(backendStatus,new Thickness(14,12,14,12));statusCard.Margin=new Thickness(0,6,0,0);panel.Children.Add(statusCard);
-        Section(panel,"\uE720","Audio sources","Choose up to two applications, or use one playback output. Capture starts only when enabled.");
+        Section(panel,"\uE720","Audio sources","Choose up to two applications, or use one playback output. Windows default playback starts automatically after the model is ready. Application selection replaces fallback.");
         foreach(string slot in new[]{"a","b","device"}) {
             bool device=slot=="device";
             var card=new StackPanel();
@@ -48,8 +48,7 @@ internal sealed partial class OverlayWindow {
             select.SelectionChanged+=(sender,e)=>{if(enabled.IsChecked==true)Configure(sender,e);};
         }
         sourceStatus=Theme.Text("",12,"#B9C7DC");sourceStatus.Margin=new Thickness(2,0,2,0);panel.Children.Add(sourceStatus);
-        Section(panel,"\uE950","Speech processing","Choose Auto, NVIDIA GPU (CUDA), or CPU. Actual device and verification are reported separately.");AddProcessingControls(panel);
-        Section(panel,"\uE8D2","Caption appearance","A comfortable reading size and clear source accents, independent of the window’s size.");
+        Section(panel,"\uE8D2","Captions","A comfortable reading size and clear source accents, independent of the window’s size.");
         var sliders=new StackPanel();
         fontControl=Range(sliders,"Caption text size",16,60,prefs.FontSize,n=>{if(!syncing)Change(prefs with{FontSize=n});},false);
         sliders.Children.Add(new Border { Height=1,Background=Theme.Brush("#344358"),Margin=new Thickness(0,12,0,12) });
@@ -70,7 +69,8 @@ internal sealed partial class OverlayWindow {
             colors.Children.Add(row);
         }
         panel.Children.Add(Theme.Card(colors));
-        Section(panel,"\uE737","Window behavior","Position your captions once, then keep them where you need them.");
+        Section(panel,"\uE950","Speech Recognition","Your model and processing preference are saved on this PC.");AddSpeechSettings(panel);
+        Section(panel,"\uE737","Advanced","Position your captions once, then keep them where you need them.");
         var behavior=new StackPanel();
         topSetting=Setting(behavior,"Always on top","Keep captions above ordinary desktop windows.",prefs.Topmost,v=>Change(prefs with{Topmost=v}));
         Divider(behavior);
@@ -83,7 +83,6 @@ internal sealed partial class OverlayWindow {
         pauseButton=Theme.Button(state.Paused?"Resume capture":"Pause capture",async(_,_)=>await Send(new{type="pause",paused=!state.Paused}),style:"PrimaryButton");pauseButton.Name="PauseCapture";session.Children.Add(pauseButton);
         var clear=Theme.Button("Clear history",async(_,_)=>await Send(new{type="clear"}),"\uE74D");clear.Name="ClearHistory";clear.ToolTip="Remove caption history from all connected windows";session.Children.Add(clear);
         var refresh=Theme.Button("Refresh availability",async(_,_)=>await Send(new{type="refresh"}),"\uE72C");refresh.Name="RefreshAvailability";session.Children.Add(refresh);panel.Children.Add(Theme.Card(session));
-        panel.Children.Add(Theme.Button("Speech model setup",(_,_)=>OpenSetup(),"\uE713"));
         panel.Children.Add(Theme.Text("Saved automatically on this PC. Captions, audio and session credentials are never saved.",12,"#B9C7DC"));
         UpdateSettings();controls.Show();
     }

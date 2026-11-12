@@ -7,16 +7,27 @@ GET STARTED
    Do not run from inside the ZIP and do not copy Rayme.exe by itself.
 3. Double-click Rayme.exe. No developer tools, Node.js, .NET installation,
    account, microphone permission or administrator privileges are required.
-4. In Speech setup, select an existing whisper.cpp ggml .bin model, or choose
+4. In Controls > Speech Recognition, explicitly choose an existing whisper.cpp ggml .bin model, or choose
    Download Large-v3-Turbo. The official model is about 1.63 GB; allow at least
    2.2 GB of disk space and 4 GB of free RAM. A valid interrupted download can
    be resumed. The model is verified against its pinned upstream checksum. Keep your own
    models outside the program directory; downloads use your local app data.
-5. Once speech recognition is ready, open Controls. Select and enable either
-   Application A/B or whole-device playback. Capture never starts by itself.
+5. Once the model is ready, Windows default playback capture starts automatically.
+   Use Controls > Audio sources to switch to Application A/B or pause capture.
+   Choosing applications keeps fallback off for that session; every new launch
+   starts with Windows default playback after model readiness.
 6. Drag/resize the floating window; adjust text size, opacity and colors.
    Hide keeps captions running in the tray. Closing Controls closes only that
    panel. Quit Rayme stops speech recognition, capture and all owned processes.
+
+CAPTION READING
+Application A stays above Application B in separate continuous transcript panels.
+Whole-device playback uses one panel. Each scrolls independently; captions follow
+new speech only while you are near the bottom. Scroll back down to resume follow.
+Finalized captions remain during silence and pauses. History is bounded to the
+latest 30 finalized segments across sources. Clear history is shared by all clients.
+Controls show recent audio signal levels; very quiet speech may need higher
+application playback volume. Rayme does not change your Windows device settings.
 
 LOCAL AND OFFLINE
 Audio and captions stay on this PC. They are not saved or uploaded. Internet
@@ -24,7 +35,7 @@ access is used only when you explicitly download a model. After setup, local
 captioning does not require the Internet. Runtime/model settings and downloads
 are stored in %LOCALAPPDATA%\Rayme\Runtime; appearance remains in
 %LOCALAPPDATA%\Rayme\CaptionOverlay. No .env editing is necessary.
-If a selected model is moved, open Controls > Speech model setup and select it
+If a selected model is moved, open Controls > Speech Recognition and select it
 again. Models are not bundled in the ZIP. CI's tiny.en test model is not a
 production default and is never silently installed.
 
@@ -37,9 +48,8 @@ CUDA toolkit installation. Drivers are not redistributed or installed by Rayme.
 Other GPUs/unsupported drivers use CPU in Auto; explicit CUDA reports an error
 rather than claiming GPU acceleration. CPU always works without NVIDIA hardware.
 
-Choose the mode in Controls or Speech setup; no .env editing is required. A mode
-change stops capture and the old model process before reloading. Enable your
-sources again afterward. The UI reports the ACTUAL initialized backend separately
+Choose the mode in Controls > Speech Recognition; no .env editing is required. A mode
+change stops capture and the old model process before reloading. Your selected sources and pause state return after a successful reload. The UI reports the ACTUAL initialized backend separately
 from the requested mode. "CUDA initialized" alone is not proof of acceleration.
 After real inference, Rayme checks whether NVIDIA independently reports its
 Whisper process. If that evidence is unavailable, GPU activity stays explicitly

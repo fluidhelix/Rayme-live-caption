@@ -43,11 +43,11 @@ async function speechE2E(runtime, output) {
     ws.on('message',m=>received.push(JSON.parse(m)));
     await new Promise((resolve,reject)=>{ws.once('open',resolve);ws.once('error',reject);});
     const source=Object.freeze({id:'licensed-speech',generation:1,name:'Public-domain speech fixture',identity:'sha256:'+require('./assets.json').fixtureSha256});
-    const failures=[], jobs=[];
+    const failures=[], jobs=[],measurements=[];
     // This is an offline CPU speech/accuracy integration test, not a real-time latency test.
     // Allow slow hosted runners to finish real inference; deterministic lifecycle tests
     // independently enforce the 15-second production caption freshness policy.
-    scheduler=new SourceScheduler((audio,signal)=>whisper.infer(audio,signal),e=>ui.publish(e),(_s,state,message)=>{if(state==='unavailable'||message.includes('skipped'))failures.push(message);},Date.now,{maxAgeMs:120000});scheduler.attach(source);
+    scheduler=new SourceScheduler(async(audio,signal)=>{const start=performance.now();try{return await whisper.infer(audio,signal);}finally{measurements.push({audioMs:audio.length/32,inferenceMs:Math.round(performance.now()-start)});}},e=>ui.publish(e),(_s,state,message)=>{if(state==='unavailable'||message.includes('skipped'))failures.push(message);},Date.now,{maxAgeMs:120000});scheduler.attach(source);
     const segmenter=new Segmenter();segmenter.on('segment',job=>{jobs.push({id:job.id,final:job.final});scheduler.add(source,{...job,capturedAt:job.captureOffsetMs});});
     // Feed frames in batches, exercising real partial/final queue coalescing without realtime sleep.
     for(let i=0;i<pcm.length;i+=640)segmenter.push(pcm.subarray(i,i+640));
@@ -55,6 +55,9 @@ async function speechE2E(runtime, output) {
     const deadline=Date.now()+180000;
     while((scheduler.busy || [...scheduler.sources.values()].some(s=>s.finals.length||s.partial)) && Date.now()<deadline)await new Promise(r=>setTimeout(r,50));
     assert.ok(Date.now()<deadline,'Real Whisper inference timed out');assert.deepEqual(failures,[]);
+    assert.ok(measurements.length>=2,'Real incremental and final inference must both execute');
+    assert.ok(measurements[0].audioMs>=600&&measurements[0].audioMs<=800,'First actual inference must use an early audio window');
+    rows.push({check:'Measured incremental inference throughput',outcome:'PASS',evidence:JSON.stringify({attempts:measurements,adaptivePartialIntervalMs:scheduler.partialInterval(),note:'Actual CPU decode timings on this runner; not GPU or production-model latency validation. Audio is batch-fed, so this is not end-to-end real-time latency.'})});
     const captionDeadline=Date.now()+3000;
     while(!received.some(e=>e.type==='caption'&&e.final)&&Date.now()<captionDeadline)await new Promise(r=>setTimeout(r,25));
     const finals=received.filter(e=>e.type==='caption'&&e.final);

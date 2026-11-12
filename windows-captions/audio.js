@@ -10,7 +10,7 @@ function wav(pcm) {
 }
 // Fixed 20 ms frames make segmentation independent of pipe chunk boundaries.
 class Segmenter extends EventEmitter {
-  constructor({ threshold = 80, maxMs = 15000, pauseMs = 900, partialMs = 2500 } = {}) {
+  constructor({ threshold = 80, maxMs = 15000, pauseMs = 900, partialMs = 700 } = {}) {
     super(); Object.assign(this, { threshold, maxMs, pauseMs, partialMs }); this.id = 0; this.reset();
   }
   reset() { this.elapsedMs = 0; this.captureOffsetMs = 0; this.tail = Buffer.alloc(0); this.pre = []; this.frames = []; this.quiet = 0; this.voiced = 0; this.lastPartial = 0; }
@@ -24,7 +24,9 @@ class Segmenter extends EventEmitter {
     this.elapsedMs += 20;
     let power = 0;
     for (let i = 0; i < 640; i += 2) power += frame.readInt16LE(i) ** 2;
-    const active = Math.sqrt(power / 320) >= this.threshold;
+    const rms = Math.sqrt(power / 320), active = rms >= this.threshold;
+    this.levelFrames=(this.levelFrames||0)+1;this.levelPeak=Math.max(this.levelPeak||0,rms);
+    if(this.levelFrames>=25){this.emit('level',{rms:this.levelPeak});this.levelFrames=0;this.levelPeak=0;}
     if (!this.frames.length) {
       if (!active) { this.pre.push(frame); if (this.pre.length > 12) this.pre.shift(); return; }
       this.captureOffsetMs = this.elapsedMs - 20 - this.pre.length * 20;
@@ -34,7 +36,7 @@ class Segmenter extends EventEmitter {
     this.frames.push(frame); this.quiet = active ? 0 : this.quiet + 20; if (active) this.voiced += 20;
     const ms = this.frames.length * 20;
     if (ms >= this.maxMs || this.quiet >= this.pauseMs) { this.finish(); return; }
-    if (ms >= 1200 && ms - this.lastPartial >= this.partialMs) {
+    if (ms >= 600 && ms - this.lastPartial >= this.partialMs) {
       this.lastPartial = ms; this.emit('segment', { id: this.id, captureOffsetMs: this.captureOffsetMs, pcm: Buffer.concat(this.frames), final: false });
     }
   }

@@ -75,6 +75,6 @@ test('overlapping application trees are rejected without replacing a working ind
 });
 
 test('capture ordering derives from PCM sample offsets, independent of transport chunking',()=>{
- const {Segmenter}=require('../windows-captions/audio');const a=new Segmenter(),b=new Segmenter(),one=[],two=[];a.on('segment',j=>one.push(j.captureOffsetMs));b.on('segment',j=>two.push(j.captureOffsetMs));
- const pcm=Buffer.concat([tone(2000,0),tone(500),tone(1000,0),tone(500),tone(1000,0)]);a.push(pcm);for(let i=0;i<pcm.length;i+=137)b.push(pcm.subarray(i,i+137));assert.deepEqual(one,two);assert.ok(one[1]>one[0]);
+ const {Segmenter}=require('../windows-captions/audio');const a=new Segmenter(),b=new Segmenter(),one=[],two=[];a.on('segment',j=>one.push({id:j.id,final:j.final,offset:j.captureOffsetMs}));b.on('segment',j=>two.push({id:j.id,final:j.final,offset:j.captureOffsetMs}));
+ const pcm=Buffer.concat([tone(2000,0),tone(500),tone(1000,0),tone(500),tone(1000,0)]);a.push(pcm);for(let i=0;i<pcm.length;i+=137)b.push(pcm.subarray(i,i+137));assert.deepEqual(one,two);const finals=one.filter(j=>j.final);assert.equal(finals.length,2);assert.ok(finals[1].offset>finals[0].offset);assert.ok(one.some(j=>!j.final));
 });

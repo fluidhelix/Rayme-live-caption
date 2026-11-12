@@ -22,11 +22,11 @@ class SetupManager{
   constructor({root,exe,publish,startModel,fetchFile=fetch,runtimeCheck=checkRuntime,models=catalog.models}){
     Object.assign(this,{root,exe,publish,startModel,fetchFile,runtimeCheck,models});this.file=path.join(root,'runtime.json');this.abort=new AbortController();this.busy=false;
     this.mode='auto';this.model=null;
-    this.state={type:'setup',required:true,phase:'checking',processingMode:'auto',message:'Checking the local speech runtime…',models:models.map(({id,name,approxBytes,requiredDiskBytes,license})=>({id,name,approxBytes,requiredDiskBytes,license})),downloaded:0,total:0};
+    this.state={type:'setup',required:true,phase:'checking',processingMode:'auto',activeModel:null,selectedModel:null,message:'Checking the local speech runtime…',models:models.map(({id,name,approxBytes,requiredDiskBytes,license})=>({id,name,approxBytes,requiredDiskBytes,license})),downloaded:0,total:0};
   }
   update(values){this.state={...this.state,...values};this.publish(this.state);}
   async initialize(){
-    this.runtimeReady=false;this.update({required:true,phase:'checking',message:'Checking the local CPU speech runtime…'});
+    this.runtimeReady=false;this.update({required:true,activeModel:null,phase:'checking',message:'Checking the local CPU speech runtime…'});
     await fsp.mkdir(this.root,{recursive:true});
     try{await this.runtimeCheck(this.exe,this.abort.signal);this.runtimeReady=true;}
     catch(e){if(!this.abort.signal.aborted)this.update({phase:'error',message:e.message});return;}
@@ -40,11 +40,12 @@ class SetupManager{
     try{await this.load(file);}catch(e){if(!this.abort.signal.aborted)this.update({required:true,phase:'error',message:e.message});}finally{this.busy=false;}
   }
   async load(file){
+    this.update({required:true,activeModel:null,selectedModel:{name:path.basename(file),path:file}});
     await checkModel(file);this.update({required:true,phase:'loading',message:'Loading the selected model locally. Large models can take a few minutes. Capture remains disabled.'});
     const processing=await this.startModel(file,this.mode);
     if(this.abort.signal.aborted)return;
     this.model=file;await fsp.writeFile(this.file+'.tmp',JSON.stringify({version:1,model:file,processingMode:this.mode},null,2)+'\n');await fsp.rename(this.file+'.tmp',this.file);
-    this.update({required:false,phase:'ready',processingMode:this.mode,processing,message:'Speech recognition is ready. Enable your audio sources in Controls. '+(processing?.message||'')});
+    this.update({required:false,phase:'ready',activeModel:{name:path.basename(file),path:file},processingMode:this.mode,processing,message:'Speech recognition is ready. Your selected audio sources are restored automatically. '+(processing?.message||'')});
   }
   async download(id){
     if(this.busy||!this.runtimeReady)throw Error('Wait for setup to finish before retrying.');
@@ -59,7 +60,7 @@ class SetupManager{
         if(await digest(part,'sha1',this.abort.signal)===model.sha1){await fsp.rename(part,final);await this.load(final);return;}
       }
       const disk=await fsp.statfs(this.root);if(Number(disk.bavail)*Number(disk.bsize)<model.requiredDiskBytes)throw Error('Not enough free disk space. Allow at least 2.2 GB for the model, or choose an existing model.');
-      this.update({phase:'downloading',message:'Downloading the official Whisper model. You may cancel and retry; valid partial downloads are retained.',downloaded:offset,total:model.approxBytes});
+      this.update({required:true,activeModel:null,phase:'downloading',message:'Downloading the official Whisper model. You may cancel and retry; valid partial downloads are retained.',downloaded:offset,total:model.approxBytes});
       const response=await this.fetchFile(model.url,{headers:offset?{Range:`bytes=${offset}-`}:{},signal:this.abort.signal});
       const rejectResponse=async message=>{await response.body?.cancel();throw Error(message);};
       if(!response.ok){if(response.status===416&&offset){await fsp.unlink(part);await rejectResponse('The saved partial download could not be resumed and was removed. Retry to download a fresh verified model.');}await rejectResponse(`The model download server returned HTTP ${response.status}. Check your connection and retry.`);}

@@ -3,7 +3,7 @@ const fs=require('node:fs');
 const path=require('node:path');
 const crypto=require('node:crypto');
 const pins=require('./assets.json');
-const backend=['audio.js','capture.js','main.js','native-overlay.js','server.js','setup.js','sources.js','whisper.js','models.json','overlay.html','processing.js','runtime-device.js','caption-lifecycle.js'];
+const backend=['audio.js','capture.js','main.js','native-overlay.js','server.js','setup.js','sources.js','whisper.js','models.json','overlay.html','processing.js','runtime-device.js','caption-lifecycle.js','capture-session.js'];
 function hash(file){return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');}
 function walk(dir){return fs.readdirSync(dir,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(path.join(dir,e.name)):[path.join(dir,e.name)]);}
 function assemble({repo,out,launcher,overlay,helper,node,whisper,cuda,licenses,commit,nativeRuntimeKey,nativeRuntimeProducerCommit}){

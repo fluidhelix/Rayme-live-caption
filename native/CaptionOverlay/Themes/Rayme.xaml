@@ -127,6 +127,24 @@
       <ControlTemplate.Triggers><Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.4"/></Trigger></ControlTemplate.Triggers>
     </ControlTemplate></Setter.Value></Setter>
   </Style>
+  <Style TargetType="RadioButton">
+    <Setter Property="Foreground" Value="{StaticResource TextBrush}"/><Setter Property="MinHeight" Value="38"/>
+    <Setter Property="Cursor" Value="Hand"/><Setter Property="FocusVisualStyle" Value="{StaticResource KeyboardFocus}"/>
+    <Setter Property="Template"><Setter.Value><ControlTemplate TargetType="RadioButton">
+      <Grid Background="Transparent">
+        <Grid.ColumnDefinitions><ColumnDefinition Width="28"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+        <Border x:Name="Ring" Width="18" Height="18" CornerRadius="9" BorderBrush="#8B9EB8" BorderThickness="1" VerticalAlignment="Center">
+          <Border x:Name="Dot" Width="8" Height="8" CornerRadius="4" Background="#BDEAFF" Visibility="Hidden"/>
+        </Border>
+        <ContentPresenter Grid.Column="1" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+      </Grid>
+      <ControlTemplate.Triggers>
+        <Trigger Property="IsChecked" Value="True"><Setter TargetName="Dot" Property="Visibility" Value="Visible"/><Setter TargetName="Ring" Property="BorderBrush" Value="#BDEAFF"/></Trigger>
+        <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Ring" Property="BorderBrush" Value="White"/></Trigger>
+        <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.5"/><Setter Property="Cursor" Value="Arrow"/></Trigger>
+      </ControlTemplate.Triggers>
+    </ControlTemplate></Setter.Value></Setter>
+  </Style>
   <Style x:Key="Swatch" TargetType="RadioButton">
     <Setter Property="Width" Value="38"/><Setter Property="Height" Value="38"/><Setter Property="Margin" Value="0,2,6,2"/>
     <Setter Property="Cursor" Value="Hand"/><Setter Property="FocusVisualStyle" Value="{StaticResource KeyboardFocus}"/>

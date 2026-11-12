@@ -31,6 +31,7 @@ static class Program{
             using(var session=new Session()){
                 session.Wait("setup-required");var overlay=Overlay();int pid=overlay.Id;
                 var pathBox=Find(pid,"Existing model path",ControlType.Edit);
+                ((SelectionItemPattern)Find(pid,"Choose existing local model",ControlType.RadioButton).GetCurrentPattern(SelectionItemPattern.Pattern)).Select();
                 Check(!File.Exists(Path.Combine(data,"runtime.json")),"First run does not manufacture a model configuration");
                 string invalid=Path.Combine(data,"invalid.bin");File.WriteAllText(invalid,"Not a model");Set(pathBox,invalid);Invoke(Find(pid,"Use this model",ControlType.Button));
                 Until(()=>Find(pid,"Speech setup status",ControlType.Text).Current.HelpText.Contains("not a complete",StringComparison.OrdinalIgnoreCase)&&Find(pid,"Use this model",ControlType.Button).Current.IsEnabled,"Invalid model recovery");
@@ -46,8 +47,12 @@ static class Program{
                 before=session.Events.Count(x=>x=="speech-ready");SelectMode(pid,"Auto — prefer compatible NVIDIA GPU");session.WaitCount("speech-ready",before+1,180);
                 Until(()=>{using var saved=JsonDocument.Parse(File.ReadAllText(Path.Combine(data,"runtime.json")));return saved.RootElement.GetProperty("processingMode").GetString()=="auto";},"Successful processing-mode persistence");
                 using(var saved=JsonDocument.Parse(File.ReadAllText(Path.Combine(data,"runtime.json"))))Check(saved.RootElement.GetProperty("processingMode").GetString()=="auto","Processing selection persists without editing .env");
-                Invoke(Find(pid,"Close Speech setup",ControlType.Button));
-                Invoke(Find(pid,"Open Controls",ControlType.Button));Invoke(Find(pid,"Close Controls",ControlType.Button));
+                Invoke(Find(pid,"Close Controls",ControlType.Button));
+                Invoke(Find(pid,"Open Controls",ControlType.Button));
+                var locking=Find(pid,"Lock position and size",ControlType.CheckBox);((TogglePattern)locking.GetCurrentPattern(TogglePattern.Pattern)).Toggle();
+                Invoke(Find(pid,"Close Controls",ControlType.Button));Invoke(Find(pid,"Open Controls",ControlType.Button));
+                Check(!session.Process.HasExited,"Settings remains accessible after toggling position lock and closing Controls");
+                Invoke(Find(pid,"Close Controls",ControlType.Button));
                 Check(!session.Process.HasExited,"Closing Controls does not end captioning");
                 var window=FindWindow(pid,"Rayme Smart Live Captions");IntPtr hwnd=new(window.Current.NativeWindowHandle);
                 Invoke(Find(pid,"Hide overlay",ControlType.Button));Thread.Sleep(200);Check(!session.Process.HasExited&&!overlay.HasExited,"Hide keeps the overlay and backend running");
@@ -98,7 +103,7 @@ static class Program{
         },name,seconds);return found!;
     }
     static void Set(AutomationElement field,string value)=>((ValuePattern)field.GetCurrentPattern(ValuePattern.Pattern)).SetValue(value);
-    static void SelectMode(int pid,string label){var combo=Find(pid,"Speech processing mode",ControlType.ComboBox);((ExpandCollapsePattern)combo.GetCurrentPattern(ExpandCollapsePattern.Pattern)).Expand();AutomationElement? item=null;Until(()=>{item=combo.FindFirst(TreeScope.Descendants,new PropertyCondition(AutomationElement.NameProperty,label));return item!=null;},"Processing option "+label);((SelectionItemPattern)item!.GetCurrentPattern(SelectionItemPattern.Pattern)).Select();}
+    static void SelectMode(int pid,string label){var combo=Find(pid,"Speech processing mode",ControlType.ComboBox);combo.SetFocus();((ExpandCollapsePattern)combo.GetCurrentPattern(ExpandCollapsePattern.Pattern)).Expand();AutomationElement? item=null;Until(()=>{item=combo.FindFirst(TreeScope.Descendants,new PropertyCondition(AutomationElement.NameProperty,label));return item!=null;},"Processing option "+label);((SelectionItemPattern)item!.GetCurrentPattern(SelectionItemPattern.Pattern)).Select();}
     static void Invoke(AutomationElement button)=>((InvokePattern)button.GetCurrentPattern(InvokePattern.Pattern)).Invoke();
     sealed class Session:IDisposable{
         public Process Process=>Capture.Process;

@@ -22,12 +22,12 @@ internal sealed partial class OverlayWindow : Window {
     readonly string settingsFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Rayme", "CaptionOverlay", "settings.json");
     Preferences prefs;
     readonly Border surface = new() { CornerRadius = new CornerRadius(16), BorderThickness = new Thickness(1), BorderBrush = Brush("#47566C"), Padding = new Thickness(16,8,16,12) };
-    readonly StackPanel captions = new();
-    readonly ScrollViewer scroll = new() { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled };
+    readonly Grid captions = new();
     readonly TextBlock connection = new() { FontSize = 12, Foreground = Brush("#A8E5D0"), Margin = new Thickness(0,2,0,4), TextWrapping = TextWrapping.Wrap };
-    readonly TextBlock waiting = new() { Text = "Waiting for conversation…\nOpen Controls to enable applications.", Foreground = Brush("#E0E7F2"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4,12,4,4) };
-    readonly Dictionary<string, CaptionView> views = [];
+    readonly Dictionary<string, TranscriptPanel> panels = [];
+    string panelLayout="";
     readonly Button lockButton;
+    readonly Button settingsButton;
     readonly DispatcherTimer saveTimer = new() { Interval = TimeSpan.FromMilliseconds(500) };
     readonly DispatcherTimer displayTimer = new() { Interval = TimeSpan.FromMilliseconds(300) };
     TrayIcon? tray;
@@ -61,13 +61,16 @@ internal sealed partial class OverlayWindow : Window {
         var grid = new Grid(); grid.RowDefinitions.Add(new() { Height = GridLength.Auto }); grid.RowDefinitions.Add(new() { Height = GridLength.Auto }); grid.RowDefinitions.Add(new());
         var header = new DockPanel { LastChildFill = true };
         var hide = Theme.IconButton("\uE738", "Hide overlay", (_,_) => { if (tray?.Available == true) Hide(); }); hide.ToolTip = "Hide to notification area; use the Rayme tray icon to restore"; DockPanel.SetDock(hide,Dock.Right); header.Children.Add(hide);
-        var settings = Theme.IconButton("\uE713", "Open Controls", (_,_) => OpenControls()); DockPanel.SetDock(settings,Dock.Right); header.Children.Add(settings);
+        settingsButton = Theme.IconButton("\uE713", "Open Controls", (_,_) => OpenControls()); DockPanel.SetDock(settingsButton,Dock.Right); header.Children.Add(settingsButton);
         lockButton = Theme.IconButton("\uE72E", "Lock overlay position", (_,_) => Change(prefs with { Locked = !prefs.Locked })); DockPanel.SetDock(lockButton,Dock.Right); header.Children.Add(lockButton);
+        // Header controls always belong to WPF client hit testing, including after
+        // WindowChrome rebuilds its non-client region on a ResizeMode change.
+        WindowChrome.SetIsHitTestVisibleInChrome(header,true);
         var drag = new StackPanel { Orientation=Orientation.Horizontal, VerticalAlignment=VerticalAlignment.Center, Cursor=Cursors.SizeAll, ToolTip="Drag to any monitor (unlock first)", Margin=new Thickness(0,4,0,4) };
         drag.Children.Add(Theme.Mark(22)); var wordmark=Theme.Text("Rayme",13,"#E0E7F2",true); wordmark.Margin=new Thickness(8,0,0,0); wordmark.VerticalAlignment=VerticalAlignment.Center; drag.Children.Add(wordmark);
         drag.MouseLeftButtonDown += (_,e) => { if (!prefs.Locked && !clickThrough && e.ButtonState == MouseButtonState.Pressed) { try { DragMove(); } catch (InvalidOperationException) { } } }; header.Children.Add(drag);
         grid.Children.Add(header); Grid.SetRow(connection,1); grid.Children.Add(connection);
-        scroll.Content = captions;scroll.Focusable=true;scroll.SetResourceReference(Control.FocusVisualStyleProperty,"KeyboardFocus");Theme.Accessible(scroll,"Caption history");Grid.SetRow(scroll,2); grid.Children.Add(scroll); surface.Child = grid; Content = surface;
+        Grid.SetRow(captions,2); grid.Children.Add(captions); surface.Child = grid; Content = surface;
         saveTimer.Tick += (_,_) => { saveTimer.Stop(); Save(); };
         displayTimer.Tick += (_,_) => { displayTimer.Stop(); Recover(false); };
         SourceInitialized += (_,_) => {
@@ -86,7 +89,7 @@ internal sealed partial class OverlayWindow : Window {
         };
         Closing += (_,e) => { if(!smoke&&!backendClosed){e.Cancel=true;QuitRayme();return;} closing = true; saveTimer.Stop(); displayTimer.Stop(); if (!smoke) Save(); };
         Closed += async (_,_) => {
-            controls?.Close(); setupWindow?.Close(); tray?.Dispose(); if (client != null) await client.DisposeAsync();
+            controls?.Close(); tray?.Dispose(); if (client != null) await client.DisposeAsync();
         };
     }
     IntPtr WindowMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled) {
@@ -113,9 +116,10 @@ internal sealed partial class OverlayWindow : Window {
     void ApplyAppearance() {
         surface.Background = new SolidColorBrush(Color.FromArgb((byte)(prefs.BackgroundOpacity * 255), 15, 23, 38));
         Topmost = prefs.Topmost; ResizeMode = prefs.Locked ? ResizeMode.NoResize : ResizeMode.CanResizeWithGrip;
-        lockButton.Content = prefs.Locked ? "\uE785" : "\uE72E";
-        Theme.Accessible(lockButton,prefs.Locked ? "Unlock overlay position" : "Lock overlay position");
-        lockButton.ToolTip = prefs.Locked ? "Position and size locked" : "Lock position and size";
+        WindowChrome.GetWindowChrome(this).ResizeBorderThickness=new Thickness(prefs.Locked?0:7);
+        lockButton.Content = WindowInteraction.LockGlyph(prefs.Locked);
+        Theme.Accessible(lockButton,WindowInteraction.LockAction(prefs.Locked));
+        lockButton.ToolTip = WindowInteraction.LockHint(prefs.Locked);
     }
     void Through(bool enabled) {
         // Only enable once a live tray recovery surface exists; never persist this mode.
@@ -133,7 +137,7 @@ internal sealed partial class OverlayWindow : Window {
     TrayAction[] BuildTrayActions() => [
         new("Show overlay", "\uE8A7", () => Reveal()),
         new("Open Controls", "\uE713", () => Reveal(true)),
-        new(prefs.Locked ? "Unlock position" : "Lock position", "\uE72E", () => Change(prefs with { Locked=!prefs.Locked })),
+        new(prefs.Locked ? "Unlock position" : "Lock position", WindowInteraction.LockGlyph(prefs.Locked), () => Change(prefs with { Locked=!prefs.Locked })),
         new("Disable click-through", "\uE8B0", () => { Through(false); Reveal(); }),
         new("Restore to primary monitor", "\uE9E9", () => { Change(prefs with { Locked=false }); Reveal(); Recover(true); }),
         new("Quit Rayme", "\uE8BB", QuitRayme)
@@ -156,20 +160,15 @@ internal sealed partial class OverlayWindow : Window {
     }
     void Render() {
         UpdateConnection();
-        bool follow = scroll.ScrollableHeight - scroll.VerticalOffset < 60;
-        var desired = state.History.Concat(state.Partials.OrderBy(x => x.Key).Select(x => x.Value)).Where(x => x.Text.Length > 0).OrderBy(x=>x.CapturedAt).ToArray();
-        var keys = desired.Select(CaptionPresentation.RowKey).ToHashSet();
-        foreach (string key in views.Keys.Where(x => !keys.Contains(x)).ToArray()) { captions.Children.Remove(views[key]); views.Remove(key); }
-        captions.Children.Remove(waiting);
-        for (int i = 0; i < desired.Length; i++) {
-            var c = desired[i];
-            if (!views.TryGetValue(CaptionPresentation.RowKey(c), out var view)) { view = new CaptionView(); views[CaptionPresentation.RowKey(c)] = view; }
-            string color = c.Source.Id == "a" ? prefs.ColorA : c.Source.Id == "b" ? prefs.ColorB : prefs.ColorDevice;
-            view.Update(c,prefs.FontSize,color);
-            if (captions.Children.IndexOf(view) != i) { captions.Children.Remove(view); captions.Children.Insert(i,view); }
+        var slots=TranscriptPresentation.Slots(state);string layout=string.Join(",",slots);
+        if(panelLayout!=layout){
+            captions.Children.Clear();captions.RowDefinitions.Clear();panelLayout=layout;
+            for(int i=0;i<slots.Length;i++){
+                string slot=slots[i];if(!panels.TryGetValue(slot,out var panel))panels[slot]=panel=new TranscriptPanel(slot);
+                captions.RowDefinitions.Add(new(){Height=new GridLength(1,GridUnitType.Star)});Grid.SetRow(panel,i);captions.Children.Add(panel);
+            }
         }
-        if (desired.Length == 0) captions.Children.Add(waiting);
-        if (follow) scroll.ScrollToEnd();
+        foreach(string slot in slots){string color=slot=="a"?prefs.ColorA:slot=="b"?prefs.ColorB:prefs.ColorDevice;panels[slot].Update(TranscriptPresentation.Build(state,slot),prefs.FontSize,color,setupRequired);}
     }
     async Task Send(object command) {
 #if !RAYME_DISTRIBUTION
@@ -194,7 +193,7 @@ internal sealed partial class OverlayWindow : Window {
             }
             pauseButton!.Content = state.Paused ? "Resume capture" : "Pause capture";
             Theme.Accessible(pauseButton,state.Paused?"Resume capture":"Pause capture");
-            sourceStatus!.Text = string.Join("\n",state.Sources.Values.Select(s => $"{s.Source.Id.ToUpperInvariant()} · {s.Source.Name}: {s.Label} — {s.Message}"));
+            sourceStatus!.Text = string.Join("\n",state.Sources.Values.Select(s => $"{s.Source.Id.ToUpperInvariant()} · {s.Source.Name}: {s.Label} — {s.Message}"+(state.AudioLevels.TryGetValue(s.Source.Id,out var level)?$"\nSignal: {level.Dbfs:0} dBFS · "+(level.Rms==0?"silence":level.Low?"very quiet — increase application playback volume if speech is missing":"audio detected"):"" )));
             if (lockSetting != null) lockSetting.IsChecked = prefs.Locked;
             if (topSetting != null) topSetting.IsChecked = prefs.Topmost;
             if (throughSetting != null) throughSetting.IsChecked = clickThrough;
@@ -203,27 +202,45 @@ internal sealed partial class OverlayWindow : Window {
             foreach(var (slot,swatches) in colorControls)foreach(var swatch in swatches)swatch.IsChecked=(string)swatch.Tag==(slot=="a"?prefs.ColorA:slot=="b"?prefs.ColorB:prefs.ColorDevice);
         } finally { syncing = false; }
     }
-    sealed class CaptionView : Border {
-        readonly TextBlock label = new() { FontSize=13, FontWeight=FontWeights.SemiBold, Foreground=Brush("#E0E7F2"), TextTrimming=TextTrimming.CharacterEllipsis };
-        internal readonly TextBlock Text = new() { TextWrapping=TextWrapping.Wrap, Foreground=Brush("#F8FAFC"), Margin=new Thickness(0,5,0,0), FontStyle=FontStyles.Normal, FontWeight=FontWeights.Normal, LineStackingStrategy=LineStackingStrategy.BlockLineHeight };
-        readonly Border live;
+    sealed class TranscriptPanel : Border {
+        readonly TextBlock label=Theme.Text("",13,strong:true);
+        internal readonly TextBlock Text=new(){TextWrapping=TextWrapping.Wrap,Foreground=Brush("#F8FAFC"),FontStyle=FontStyles.Normal,FontWeight=FontWeights.Normal,Margin=new Thickness(0,6,6,0)};
+        readonly System.Windows.Documents.Run finalRun=new(),partialRun=new();
+        readonly TextBlock live=Theme.Text("LIVE",10,"#BBE6FF",true);
+        internal readonly ScrollViewer Scroll=new(){VerticalScrollBarVisibility=ScrollBarVisibility.Auto,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,Focusable=true};
+        readonly ScrollFollow follow=new();
         string accent="";
+        bool scrollPending;
+        long scrollRevision;
+        double savedOffset;
         internal bool IsLive=>live.Visibility==Visibility.Visible;
         internal string SourceLabel=>label.Text;
-        public CaptionView() {
-            BorderThickness=new Thickness(3,0,0,0); Padding=new Thickness(12,2,3,3); Margin=new Thickness(0,9,0,10);
-            var panel=new StackPanel();var header=new DockPanel { MinHeight=22 };
-            live=new Border { Width=38, Height=18, CornerRadius=new CornerRadius(5), Background=Brush("#233C50"), Margin=new Thickness(8,0,0,0), Child=Theme.Text("LIVE",10,"#BBE6FF",true) };
-            ((TextBlock)live.Child).HorizontalAlignment=HorizontalAlignment.Center; ((TextBlock)live.Child).VerticalAlignment=VerticalAlignment.Center;
-            DockPanel.SetDock(live,Dock.Right);header.Children.Add(live);header.Children.Add(label);panel.Children.Add(header);panel.Children.Add(Text);Child=panel;
+        internal string FinalText=>finalRun.Text;
+        internal string PartialText=>partialRun.Text;
+        public TranscriptPanel(string slot){
+            BorderThickness=new Thickness(3,0,0,0);Padding=new Thickness(10,3,0,3);Margin=new Thickness(0,3,0,3);
+            var grid=new Grid();grid.RowDefinitions.Add(new(){Height=GridLength.Auto});grid.RowDefinitions.Add(new());
+            var header=new DockPanel();live.Width=40;live.VerticalAlignment=VerticalAlignment.Center;DockPanel.SetDock(live,Dock.Right);header.Children.Add(live);
+            label.TextTrimming=TextTrimming.CharacterEllipsis;label.TextWrapping=TextWrapping.NoWrap;header.Children.Add(label);grid.Children.Add(header);
+            Text.Inlines.Add(finalRun);Text.Inlines.Add(partialRun);Scroll.Content=Text;Scroll.SetResourceReference(Control.FocusVisualStyleProperty,"KeyboardFocus");Theme.Accessible(Scroll,slot=="device"?"Playback transcript":"Application "+slot.ToUpperInvariant()+" transcript");
+            Scroll.ScrollChanged+=(_,e)=>{if(e.ExtentHeightChange==0&&e.ViewportHeightChange==0)follow.ReaderMoved(Scroll.VerticalOffset,Scroll.ScrollableHeight);};
+            Grid.SetRow(Scroll,1);grid.Children.Add(Scroll);Child=grid;
         }
-        public void Update(Caption c,double size,string color) {
-            string title=(c.Source.Id=="legacy"?"OUTPUT":c.Source.Id.ToUpperInvariant())+"  ·  "+c.Source.Name;
-            if(label.Text!=title){label.Text=title;label.ToolTip=title;}
-            if(Text.Text!=c.Text)Text.Text=c.Text; // Literal transcript text; never markup.
-            if(Text.FontSize!=size){Text.FontSize=size;Text.LineHeight=size*1.4;}
-            live.Visibility=c.Final?Visibility.Hidden:Visibility.Visible; // Reserve the same header space.
-            if(accent!=color){BorderBrush=Theme.Brush(color);accent=color;}
+        public void Update(Transcript transcript,double size,string color,bool setup){
+            label.Text=transcript.Label;label.ToolTip=transcript.Label;live.Visibility=transcript.Live?Visibility.Visible:Visibility.Hidden;
+            string final=transcript.FinalText,partial=transcript.PartialText;
+            if(final.Length==0&&partial.Length==0)final=setup?"Complete speech setup to begin.":"Listening for conversation…";
+            string tail=partial.Length>0?(transcript.FinalText.Length>0?" ":"")+partial:"";
+            bool changed=finalRun.Text!=final||partialRun.Text!=tail||Text.FontSize!=size;
+            if(finalRun.Text!=final)finalRun.Text=final;if(partialRun.Text!=tail)partialRun.Text=tail;
+            Text.FontSize=size;Text.LineHeight=size*1.4;if(accent!=color){BorderBrush=Theme.Brush(color);accent=color;}
+            if(changed){
+                scrollRevision=follow.Revision;savedOffset=Scroll.VerticalOffset;
+                if(!scrollPending){scrollPending=true;Dispatcher.BeginInvoke(DispatcherPriority.Loaded,new Action(()=>{
+                    scrollPending=false;if(follow.Revision!=scrollRevision)return; // A reader moved after this update; leave their position alone.
+                    if(follow.Following)Scroll.ScrollToEnd();else Scroll.ScrollToVerticalOffset(savedOffset);
+                }));}
+            }
         }
     }
 }

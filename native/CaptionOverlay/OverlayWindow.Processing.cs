@@ -14,8 +14,8 @@ internal sealed partial class OverlayWindow {
     string requestedMode="auto";
     void AddProcessingControls(Panel panel){
         var row=new StackPanel();
-        row.Children.Add(Theme.Text("Processing mode",14,strong:true));
-        row.Children.Add(Theme.Text("Auto prefers compatible NVIDIA CUDA. Switching stops capture and reloads the model; enable sources again afterward.",12,"#B9C7DC"));
+        row.Children.Add(Theme.Text("Requested processing mode",14,strong:true));
+        row.Children.Add(Theme.Text("Auto prefers compatible NVIDIA CUDA. Switching reloads the model, then restores your selected sources and pause state.",12,"#B9C7DC"));
         var select=new ComboBox { ItemsSource=new[]{new Choice("auto","Auto — prefer compatible NVIDIA GPU"),new Choice("cuda","NVIDIA GPU (CUDA)"),new Choice("cpu","CPU")},DisplayMemberPath="Name",SelectedValuePath="Id",SelectedValue=requestedMode,Margin=new Thickness(0,10,0,8) };
         Theme.Accessible(select,"Speech processing mode");processingChoices.Add(select);
         select.Unloaded+=(_,_)=>processingChoices.Remove(select);

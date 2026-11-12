@@ -20,7 +20,7 @@ internal sealed class ModernWindow : Window {
         var close=Theme.IconButton("\uE8BB","Close "+title,(_,_)=>Close());DockPanel.SetDock(close,Dock.Right);header.Children.Add(close);
         var mark=Theme.Mark(34);mark.Margin=new Thickness(0,0,12,0);DockPanel.SetDock(mark,Dock.Left);header.Children.Add(mark);
         var words=new StackPanel();words.Children.Add(Theme.Text(title,20,strong:true));words.Children.Add(Theme.Text(subtitle,12,"#B9C7DC"));header.Children.Add(words);
-        header.MouseLeftButtonDown+=(_,e)=>{if(e.ButtonState==MouseButtonState.Pressed){try{DragMove();}catch(InvalidOperationException){}}};
+        header.MouseLeftButtonDown+=(_,e)=>{if(!e.Handled&&e.OriginalSource is not Button&&e.ButtonState==MouseButtonState.Pressed){try{DragMove();}catch(InvalidOperationException){}}};
         shell.Children.Add(header);var scroll=new ScrollViewer { Content=body,Focusable=false,VerticalScrollBarVisibility=ScrollBarVisibility.Auto,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,Margin=new Thickness(0,0,8,10) };Grid.SetRow(scroll,1);shell.Children.Add(scroll);
         Content=new Border { Background=Theme.Brush("#111722"),CornerRadius=new CornerRadius(16),BorderBrush=Theme.Brush("#506078"),BorderThickness=new Thickness(1),Child=shell };
         PreviewKeyDown+=(_,e)=>{if(e.Key==Key.Escape){var dropdown=OpenDropdown(this);if(dropdown!=null)dropdown.IsDropDownOpen=false;else Close();e.Handled=true;}};

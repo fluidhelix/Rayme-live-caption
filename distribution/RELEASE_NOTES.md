@@ -18,6 +18,22 @@ capture helpers and overlay, without opening a browser. Unexpected failures
 stop the session and offer controlled Retry or Quit. Hide and Close Controls
 remain separate operations.
 
+## Phase 5B usability changes
+
+Windows default playback now starts automatically once the configured model is
+ready. Switching to applications keeps fallback off for the rest of that session.
+Fixed independent transcript panels replace utterance cards; finalized sentences
+join naturally and survive silence, pause and model reload. Scroll-follow pauses
+while rereading. Controls consolidate model choice, active model and requested
+versus actual processing device in Speech Recognition; downloads require explicit
+selection and consent. Lock controls keep Settings in the WPF client hit-test area.
+
+Initial partial audio windows target 700 ms, with adaptive pacing and coalescing
+when recognition is slower. This is not a guarantee of 700 ms displayed-caption
+latency, especially on CPU with Large-v3-Turbo. Existing freshness and attribution
+guards remain. Privacy-preserving signal feedback can help identify low playback
+volume without recording audio or changing device settings.
+
 ## Acceptance status
 
 Publication is gated on required Node, native, WPF GUI/lifecycle, portable ZIP
@@ -32,7 +48,7 @@ Windows-machine acceptance is required before a stable release is authorized.
 Unsigned publisher/SmartScreen warnings may occur; security must not be disabled.
 No Defender whitelist, anti-cheat approval or exclusive-fullscreen visibility
 claim is made. CPU speed/model memory and recognition accuracy vary with hardware
-and source audio. The same ZIP includes CUDA 12.8.1 runtime components under NVIDIA's redistribution terms. Auto prefers supported RTX 30/40 GPUs, including RTX 4080, with driver 572.61 or newer, and falls back to CPU. Explicit CUDA never silently claims success on CPU. Controls report the actual backend and mark GPU activity unverified until real inference and NVIDIA per-process evidence succeed. Mode changes stop capture and the previous model before loading a replacement; enable sources again afterward. The CUDA toolkit and GPU drivers are not installed by Rayme.
+and source audio. The same ZIP includes CUDA 12.8.1 runtime components under NVIDIA's redistribution terms. Auto prefers supported RTX 30/40 GPUs, including RTX 4080, with driver 572.61 or newer, and falls back to CPU. Explicit CUDA never silently claims success on CPU. Controls report the actual backend and mark GPU activity unverified until real inference and NVIDIA per-process evidence succeed. Mode changes stop capture and the previous model before loading a replacement; selected sources and pause state return after a successful reload. The CUDA toolkit and GPU drivers are not installed by Rayme.
 
 ## Privacy and attribution
 

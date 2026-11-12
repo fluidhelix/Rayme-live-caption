@@ -37,6 +37,8 @@ internal static class DesktopPlacement {
         // EDD_GET_DEVICE_INTERFACE_NAME avoids relying only on ordinal DISPLAY1/2 names.
         return EnumDisplayDevices(device,0,ref info,1) && info.Id.Length > 0 ? info.Id : device;
     }
+    [DllImport("user32.dll")] static extern IntPtr SendMessage(IntPtr window,uint message,IntPtr w,IntPtr l);
+    internal static bool ClientHit(IntPtr window,System.Windows.Point screen)=>SendMessage(window,0x0084,IntPtr.Zero,new IntPtr(((int)screen.Y&0xffff)<<16|((int)screen.X&0xffff))).ToInt64()==1;
     public static List<Display> Displays() {
         var displays = new List<(Display Display, bool Primary)>();
         EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, (IntPtr m, IntPtr dc, ref Rect r, IntPtr data) => {

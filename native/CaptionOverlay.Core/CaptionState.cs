@@ -10,12 +10,14 @@ public record SourceStatus(Source Source, string State, string Message) {
     public string Label=>State switch{"waiting"=>"Listening — no speech","capturing"=>"Capture active","transcribing"=>"Transcribing","delayed"=>"Falling behind","unavailable"=>"Unavailable","recovering"=>"Recovering","stopped"=>"Stopped / paused",_=>State};
     public bool HasFailure=>State=="unavailable"||Message.Contains("Last failure:",StringComparison.OrdinalIgnoreCase)||Message.Contains("failed",StringComparison.OrdinalIgnoreCase);
 }
+public record AudioLevel(double Rms,double Dbfs,bool Low);
 public record Choice(string Id, string Name) { public override string ToString() => Name; }
 
 // Presentation state only. No audio, inference, process discovery or configuration authority.
 public sealed class CaptionState {
     public List<Caption> History { get; } = [];
     public Dictionary<string, Caption> Partials { get; } = [];
+    public Dictionary<string,AudioLevel> AudioLevels {get;}=[];
     public Dictionary<string, SourceStatus> Sources { get; } = [];
     readonly Dictionary<string, long> generations = [];
     readonly Dictionary<string, SegmentLedger> ledgers=[];
@@ -40,7 +42,7 @@ public sealed class CaptionState {
     bool Obsolete(Source s) => Sources.TryGetValue(s.Id,out var active)&&active.Source.Generation==s.Generation&&active.Source.Identity!=s.Identity || generations.GetValueOrDefault(s.Id) > s.Generation || (removed.Contains(s.Id) && generations.GetValueOrDefault(s.Id) >= s.Generation);
     void Track(Source s) {
         if (generations.GetValueOrDefault(s.Id) < s.Generation) {
-            Partials.Remove(s.Id); ledgers.Remove(s.Id);
+            Partials.Remove(s.Id);AudioLevels.Remove(s.Id); ledgers.Remove(s.Id);
             if (Sources.TryGetValue(s.Id, out var old)) { if(old.Source.Identity != s.Identity){History.RemoveAll(x => x.Source.Id == s.Id);Sources.Remove(s.Id);}else Sources[s.Id]=old with{Source=s}; }
         }
         generations[s.Id] = s.Generation; removed.Remove(s.Id);
@@ -51,7 +53,7 @@ public sealed class CaptionState {
     void Apply(JsonElement e) {
         string type = Str(e, "type", 40);
         if (type == "snapshot") {
-            History.Clear(); Partials.Clear(); Sources.Clear(); generations.Clear(); ledgers.Clear(); removed.Clear();
+            History.Clear(); Partials.Clear(); Sources.Clear();AudioLevels.Clear(); generations.Clear(); ledgers.Clear(); removed.Clear();
             Apps = Choices(e, "apps"); Devices = Choices(e, "devices"); ProcessSupported = Flag(e, "processSupported"); Paused = Flag(e, "paused"); Status = Str(e, "status");
             if (e.TryGetProperty("sources", out var sources)) foreach (var item in sources.EnumerateObject()) Apply(item.Value);
             if (e.TryGetProperty("history", out var history)) foreach (var item in history.EnumerateArray()) {
@@ -69,6 +71,7 @@ public sealed class CaptionState {
             void RestorePartial(JsonElement item){var c=ReadCaption(item);if(Obsolete(c.Source)||c.Source.Id!="legacy"&&(!Sources.TryGetValue(c.Source.Id,out var active)||active.Source.Generation!=c.Source.Generation||active.Source.Identity!=c.Source.Identity))return;var book=Ledger(c.Source.Id);long rev=book.Revision(c.Id,item);if(book.Allows(c.Id,rev,snapshot:true)&&c.Text.Length>0){Partials[c.Source.Id]=c with{Revision=rev};book.Mark(c.Id,rev);}}
             if (e.TryGetProperty("partials", out var partials)) foreach (var p in partials.EnumerateObject()) RestorePartial(p.Value);
             if (e.TryGetProperty("partial", out var partial) && partial.ValueKind == JsonValueKind.Object) RestorePartial(partial);
+            if(e.TryGetProperty("audioLevels",out var levels))foreach(var level in levels.EnumerateObject())Apply(level.Value);
             return;
         }
         if (type == "applications") { Apps = Choices(e, "apps"); ProcessSupported = Flag(e, "supported"); }
@@ -78,10 +81,12 @@ public sealed class CaptionState {
         if (type == "cleared") { History.Clear(); Partials.Clear(); }
         var source = ReadSource(e);
         if (source != null && Obsolete(source)) return;
+        if(type=="audio-level"&&source!=null){if(Sources.TryGetValue(source.Id,out var active)&&active.Source.Generation==source.Generation&&active.Source.Identity==source.Identity)AudioLevels[source.Id]=new(Num(e,"rms"),Num(e,"dbfs"),Flag(e,"low"));return;}
         if (type is "source-status" or "reset" && source != null) {
             Track(source);
             if(type=="source-status")Sources[source.Id]=new(source,Str(e,"state",40),Str(e,"message"));
             else{
+                AudioLevels.Remove(source.Id);
                 if(Partials.TryGetValue(source.Id,out var pending))Ledger(source.Id).Mark(pending.Id,pending.Revision,closed:true,cleared:true);
                 Partials.Remove(source.Id);var previous=Sources.GetValueOrDefault(source.Id);
                 Sources[source.Id]=new(source,previous?.State??"waiting",previous?.Message??"Waiting for audio");
@@ -89,7 +94,7 @@ public sealed class CaptionState {
         }
         if (type == "reset" && source == null) {if(Partials.TryGetValue("legacy",out var p))Ledger("legacy").Mark(p.Id,p.Revision,closed:true,cleared:true);Partials.Remove("legacy");}
         if (type == "source-removed" && source != null) {
-            generations[source.Id] = source.Generation; removed.Add(source.Id); Sources.Remove(source.Id); Partials.Remove(source.Id); ledgers.Remove(source.Id); History.RemoveAll(x => x.Source.Id == source.Id);
+            generations[source.Id] = source.Generation; removed.Add(source.Id); Sources.Remove(source.Id);AudioLevels.Remove(source.Id); Partials.Remove(source.Id); ledgers.Remove(source.Id); History.RemoveAll(x => x.Source.Id == source.Id);
         }
         if(type=="segment-retired"){
             if(source!=null)Track(source);

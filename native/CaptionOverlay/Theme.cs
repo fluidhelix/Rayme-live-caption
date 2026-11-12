@@ -17,6 +17,7 @@ internal static class Theme {
     public static Button Button(string label, RoutedEventHandler action, string? glyph=null, string? style=null) {
         var button=new Button { Margin=new Thickness(0,0,8,8),ToolTip=label };
         AutomationProperties.SetName(button,label);
+        System.Windows.Shell.WindowChrome.SetIsHitTestVisibleInChrome(button,true);
         if (style != null) button.SetResourceReference(FrameworkElement.StyleProperty,style);
         if (glyph == null) button.Content=label;
         else { var row=new StackPanel { Orientation=Orientation.Horizontal };var icon=Glyph(glyph,14);icon.Margin=new Thickness(0,0,8,0);row.Children.Add(icon);row.Children.Add(Text(label,13));button.Content=row; }

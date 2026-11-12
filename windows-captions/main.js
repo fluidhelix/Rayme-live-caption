@@ -9,12 +9,14 @@ const { listDevices, listApplications } = require('./capture');
 const { createUI } = require('./server');
 const { SetupManager } = require('./setup');
 const { ProcessingSession } = require('./processing');
+const { CaptureSession } = require('./capture-session');
 async function main() {
   if (process.platform !== 'win32') throw new Error('Rayme requires Windows 11 x64.');
   const portable = process.env.RAYME_PORTABLE === '1';
   const appRoot = portable ? path.resolve(process.env.RAYME_APP_ROOT) : path.join(__dirname, '..');
   const helper = portable ? path.join(appRoot, 'native', 'LoopbackCapture.exe') : path.join(appRoot, 'native', 'bin', 'LoopbackCapture.exe');
-  let ui, overlay, whisper, manager, scheduler, setup, stopped = false, controls = Promise.resolve(), shutdownTask, sourceGeneration=0;
+  let ui, overlay, whisper, manager, scheduler, setup, stopped = false, controls = Promise.resolve(), shutdownTask;
+  const captureSession=new CaptureSession();
   const notify = event => { if (portable) process.stdout.write(JSON.stringify(event) + '\n'); };
   const control = task => { controls = controls.catch(() => {}).then(() => { if (!stopped) return task(); }); return controls; };
   const shutdown = (reason = 'user-quit') => {
@@ -57,7 +59,7 @@ async function main() {
       catch { ui.publish({ type: 'status', message: 'Application capture is unavailable. Whole-device fallback remains available.' }); }
     };
     const initializeModel = async (model, exe,mode='auto') => {
-      scheduler?.close();if(manager)sourceGeneration=manager.generation;await manager?.close();await whisper?.close();
+      scheduler?.close();await captureSession.suspend();manager=null;await whisper?.close();
       if (stopped) return;
       const runtime = { exe, model };
       whisper = portable?new ProcessingSession({root:path.join(appRoot,'whisper'),publish:ui.publish,onFailure:fail}):new Whisper(runtime,process.env);
@@ -66,23 +68,26 @@ async function main() {
       if (stopped) return;
       scheduler = new SourceScheduler((pcm, signal) => whisper.infer(pcm, signal), event => ui.publish(event), (source, state, message, health) => ui.publish({ type: 'source-status', source, state, message, ...health }), Date.now, {maxAgeMs:captionMaxAgeMs});
       manager = new SourceManager({ helper, scheduler, publish: event => ui.publish(event), threshold });
-      manager.generation=sourceGeneration;
-      ui.publish({type:'paused',paused:false});
       await refresh();
-      ui.publish({ type: 'status', message: 'Speech recognition ready. Enable Application A/B or whole-device fallback. Capture is off until enabled.' });
+      if(stopped){await manager.close();return;}
+      await captureSession.ready(manager);
+      if(stopped){await manager.close();return;}
+      ui.publish({type:'paused',paused:captureSession.paused});
+      ui.publish({ type: 'status', message: captureSession.paused?'Speech recognition ready. Capture remains paused.':manager.slots.size?'Speech recognition ready. Capturing the selected audio sources locally.':'Speech recognition ready. No audio source is enabled; choose one in Controls.' });
       notify({ type: 'speech-ready' });
       return portable?whisper.state:undefined;
     };
     ui = await createUI({ port: portable ? 0 : Number(process.env.WINDOWS_CAPTION_PORT || 8090), onRefresh: () => control(refresh),
-      onConfigure: (slot, descriptor) => control(async () => { if (!manager || setup?.state.required) throw Error('Complete speech model setup before enabling capture.'); await manager.configure(slot, descriptor); }),
-      onPause: paused => control(async () => { if (!manager) throw Error('Complete speech setup first.'); await manager.pause(paused); }),
+      onConfigure: (slot, descriptor) => control(async () => { if (!manager || setup?.state.required) throw Error('Complete speech model setup before enabling capture.'); await captureSession.configure(slot, descriptor); }),
+      onPause: paused => control(async () => { await captureSession.pause(paused); }),
       onSetup: command => control(async () => {
         if (!setup) throw Error('Use the portable Rayme application for guided setup.');
         if(command.action==='mode'){
           if(!['auto','cuda','cpu'].includes(command.mode))throw Error('Choose Auto, NVIDIA GPU (CUDA), or CPU.');
-          setup.update({required:true,phase:'switching',processingMode:command.mode,message:'Switching processing mode. Stopping capture and the previous speech runtime…'});
+          setup.update({required:true,activeModel:null,phase:'switching',processingMode:command.mode,message:'Switching processing mode. Stopping capture and the previous speech runtime…'});
         }
-        scheduler?.close();if(manager)sourceGeneration=manager.generation;await manager?.close();manager=null;await whisper?.close();whisper=null;
+        setup.update({required:true,activeModel:null,phase:'switching',message:'Preparing speech recognition. Your audio selections will be restored when ready.'});
+        scheduler?.close();await captureSession.suspend();manager=null;await whisper?.close();whisper=null;
         if (command.action === 'mode') await setup.setMode(command.mode);
         if (command.action === 'select') await setup.select(command.path);
         if (command.action === 'download') await setup.download(command.model);

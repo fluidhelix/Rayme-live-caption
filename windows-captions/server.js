@@ -7,7 +7,7 @@ const { SegmentLedger, sourceHealth } = require('./caption-lifecycle');
 const { WebSocketServer, WebSocket } = require('ws');
 async function createUI({ port = 8090, onSelect, onRefresh, onConfigure, onPause, onSetup }) {
   const token = randomBytes(24).toString('hex');
-  const state = { type: 'snapshot', status: 'Starting local speech recognition…', history: [], partial: null, devices: [], apps: [], sources: {}, partials: {}, paused: false, segments: {}, epochs: {} };
+  const state = { type: 'snapshot', status: 'Starting local speech recognition…', history: [], partial: null, devices: [], apps: [], sources: {}, partials: {}, paused: false, segments: {}, epochs: {}, audioLevels: {} };
   const ledgers=new Map();
   function ledger(slot,generation=0){let entry=ledgers.get(slot);if(!entry||entry.generation!==generation){entry={generation,value:new SegmentLedger()};ledgers.set(slot,entry);}return entry.value;}
   function syncLedger(slot,generation){state.segments[slot]={generation,...ledger(slot,generation).toJSON()};}
@@ -30,7 +30,7 @@ async function createUI({ port = 8090, onSelect, onRefresh, onConfigure, onPause
       const epoch=state.epochs[slot];
       if(epoch&&(epoch.source.generation>source.generation||epoch.source.generation===source.generation&&epoch.source.identity!==source.identity||epoch.removed&&epoch.source.generation>=source.generation))return;
       if(!epoch||epoch.source.generation<source.generation){
-        delete state.partials[slot];ledgers.delete(slot);delete state.segments[slot];
+        delete state.partials[slot];delete state.audioLevels[slot];ledgers.delete(slot);delete state.segments[slot];
         if(epoch&&epoch.source.identity!==source.identity){state.history=state.history.filter(c=>c.source?.id!==slot);delete state.sources[slot];}
         state.sources[slot]={...(state.sources[slot]||{state:'waiting',message:'Waiting for audio'}),type:'source-status',source};
       }
@@ -39,7 +39,8 @@ async function createUI({ port = 8090, onSelect, onRefresh, onConfigure, onPause
     if(event.type==='source-status')event=sourceHealth(state.sources[slot],event);
     if (event.type === 'applications') { state.apps = event.apps; state.processSupported = event.supported; }
     if (event.type === 'source-status') state.sources[source.id] = event;
-    if (event.type === 'source-removed') { delete state.sources[slot]; delete state.partials[slot];state.history=state.history.filter(c=>c.source?.id!==slot);ledgers.delete(slot);delete state.segments[slot]; }
+    if (event.type === 'source-removed') { delete state.audioLevels[slot]; delete state.sources[slot]; delete state.partials[slot];state.history=state.history.filter(c=>c.source?.id!==slot);ledgers.delete(slot);delete state.segments[slot]; }
+    if(event.type==='audio-level'){if(!Number.isFinite(event.rms)||!Number.isFinite(event.dbfs))return;event={...event,rms:Math.max(0,Math.min(32768,event.rms)),dbfs:Math.max(-91,Math.min(0,event.dbfs))};state.audioLevels[slot]=event;}
     if (event.type === 'paused') state.paused = event.paused;
     if (event.type === 'cleared') { state.history = []; state.partials = {}; state.partial = null; }
     if (event.type === 'status') state.status = event.message;
@@ -47,6 +48,7 @@ async function createUI({ port = 8090, onSelect, onRefresh, onConfigure, onPause
     if (event.type === 'processing') state.processing = event;
     if (event.type === 'devices') { state.devices = event.devices; state.selected = event.selected; }
     if(event.type==='reset'){
+      delete state.audioLevels[slot];
       if(source){
         const old=state.sources[slot];
         state.sources[slot]={...(old||{state:'waiting',message:'Waiting for audio'}),type:'source-status',source};
