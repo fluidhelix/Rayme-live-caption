@@ -66,7 +66,7 @@ internal static class Program {
         using var job=new Job();
         string node=Path.Combine(root,"App","node","node.exe"),script=Path.Combine(root,"App","backend","main.js");
         var environment=new SortedDictionary<string,string>(StringComparer.OrdinalIgnoreCase);
-        foreach(string key in new[]{"SystemRoot","WINDIR","TEMP","TMP","LOCALAPPDATA","APPDATA","USERPROFILE","PROGRAMDATA","ProgramFiles","ProgramW6432","COMSPEC","NUMBER_OF_PROCESSORS","PROCESSOR_ARCHITECTURE"})if(Environment.GetEnvironmentVariable(key) is {} value)environment[key]=value;
+        foreach(string key in new[]{"SystemRoot","WINDIR","TEMP","TMP","LOCALAPPDATA","APPDATA","USERPROFILE","PROGRAMDATA","ProgramFiles","ProgramW6432","COMSPEC","NUMBER_OF_PROCESSORS","PROCESSOR_ARCHITECTURE","CAPTION_MAX_AGE_MS"})if(Environment.GetEnvironmentVariable(key) is {} value)environment[key]=value;
         environment["PATH"]=Path.Combine(root,"App","node")+";"+Environment.GetFolderPath(Environment.SpecialFolder.System);
         environment["RAYME_PORTABLE"]="1";environment["RAYME_APP_ROOT"]=Path.Combine(root,"App");
         environment["RAYME_DATA_ROOT"]=Environment.GetEnvironmentVariable("RAYME_DATA_ROOT")??Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),"Rayme","Runtime");

@@ -144,8 +144,9 @@ internal sealed partial class OverlayWindow : Window {
         catch { if (!closing) { connectionText = "Caption connection failed. Restart Windows caption mode."; UpdateConnection(); } }
     }
     void UpdateConnection() {
-        connection.Text = "●  " + connectionText + (state.Paused ? " · Capture paused" : "") + (clickThrough ? " · Click-through: use tray to recover" : "");
-        bool error=connectionText.Contains("lost",StringComparison.OrdinalIgnoreCase)||connectionText.Contains("failed",StringComparison.OrdinalIgnoreCase)||connectionText.Contains("not sent",StringComparison.OrdinalIgnoreCase);
+        string health=connectionText=="Connected"?string.Join(" · ",state.Sources.Values.Select(s=>$"{s.Source.Id.ToUpperInvariant()}: {s.Label}"+((s.HasFailure||s.State is "recovering" or "delayed")?$" — {s.Message}":""))):"";
+        connection.Text = "●  " + connectionText + (health.Length>0?" · "+health:"") + (state.Paused ? " · Capture paused" : "") + (clickThrough ? " · Click-through: use tray to recover" : "");
+        bool error=state.Sources.Values.Any(s=>s.HasFailure)||connectionText.Contains("lost",StringComparison.OrdinalIgnoreCase)||connectionText.Contains("failed",StringComparison.OrdinalIgnoreCase)||connectionText.Contains("not sent",StringComparison.OrdinalIgnoreCase);
         connection.Foreground=Theme.Brush(error?"#FFD0D5":state.Paused||connectionText.StartsWith("Connecting",StringComparison.Ordinal)?"#FBE0A7":"#BBE6D8");
         if(backendStatus!=null){
             string message=setupRequired&&setupState is {} setup?setup.GetProperty("message").GetString()??"Complete speech setup.":connectionText=="Connected"?state.Status:connectionText;backendStatus.Text=message;
@@ -193,7 +194,7 @@ internal sealed partial class OverlayWindow : Window {
             }
             pauseButton!.Content = state.Paused ? "Resume capture" : "Pause capture";
             Theme.Accessible(pauseButton,state.Paused?"Resume capture":"Pause capture");
-            sourceStatus!.Text = string.Join("\n",state.Sources.Values.Select(s => $"{s.Source.Id.ToUpperInvariant()} · {s.Source.Name}: {s.State}"));
+            sourceStatus!.Text = string.Join("\n",state.Sources.Values.Select(s => $"{s.Source.Id.ToUpperInvariant()} · {s.Source.Name}: {s.Label} — {s.Message}"));
             if (lockSetting != null) lockSetting.IsChecked = prefs.Locked;
             if (topSetting != null) topSetting.IsChecked = prefs.Topmost;
             if (throughSetting != null) throughSetting.IsChecked = clickThrough;

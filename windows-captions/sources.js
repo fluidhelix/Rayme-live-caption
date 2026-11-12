@@ -1,52 +1,89 @@
 'use strict';
 const { Segmenter } = require('./audio');
 const { Capture } = require('./capture');
+const { SegmentLedger } = require('./caption-lifecycle');
 
 // One model request globally. Every source owns its queues, final watermark and generation.
 class SourceScheduler {
-  constructor(infer, publish, status, now = Date.now) {
-    Object.assign(this, { infer, publish, status, now }); this.sources = new Map(); this.last = null; this.busy = false; this.closed = false;
+  constructor(infer,publish,status,now=Date.now,{maxAgeMs=15000,setTimer=setTimeout,clearTimer=clearTimeout,elapsedNow=now===Date.now?()=>performance.now():now}={}) {
+    if(!Number.isFinite(maxAgeMs)||maxAgeMs<1000||maxAgeMs>120000)throw Error('Caption freshness must be between 1000 and 120000 ms.');
+    Object.assign(this,{infer,publish,status,now,maxAgeMs,setTimer,clearTimer,elapsedNow});this.sources=new Map();this.last=null;this.busy=false;this.closed=false;
   }
-  attach(source) { this.sources.set(source.id, { source: Object.freeze({ ...source }), finals: [], partial: null, finalized: 0 }); }
-  remove(id) { this.sources.delete(id); }
-  add(source, job) {
-    const s = this.sources.get(source.id);
-    if (this.closed || !s || s.source.generation !== source.generation) return;
-    const item = { ...job, source: s.source, queuedAt: this.now() };
-    if (job.final) {
-      s.finalized = Math.max(s.finalized, job.id); s.partial = null;
-      if (s.finals.length === 2) { s.finals.shift(); this.status(source, 'delayed', 'Overloaded: an older finalized segment was skipped.'); }
-      s.finals.push(item);
-    } else if (job.id > s.finalized) s.partial = item;
-    this.pump();
+  attach(source){this.remove(source.id);this.sources.set(source.id,{source:Object.freeze({...source}),finals:[],partial:null,finalized:0,finalJobs:new Set(),queuedSince:null,queueTimer:null,revision:0,ledger:new SegmentLedger(),displayed:null,timer:null,failed:false});}
+  remove(id){const state=this.sources.get(id);if(state){this.clearTimer(state.timer);this.clearTimer(state.queueTimer);state.finals=[];state.partial=null;state.displayed=null;state.finalJobs.clear();}this.sources.delete(id);}
+  health(state,value,message,recovered=false){this.status(state.source,value,message,{component:'inference',recovered});}
+  age(job){return Math.max(0,this.elapsedNow()-job.freshAt);}
+  retire(source,id,reason,terminal=true,revision){
+    const state=this.sources.get(source.id);if(!state||state.source.generation!==source.generation)return;
+    const rev=revision??++state.revision;state.ledger.mark(id,rev,{closed:terminal,cleared:true});
+    if(terminal){state.finalJobs.delete(id);state.finals=state.finals.filter(j=>j.id!==id);}
+    if(state.partial&&(state.partial.id<id||state.partial.id===id&&(terminal||state.partial.revision<=rev)))state.partial=null;
+    if(state.displayed&&(state.displayed.id<id||state.displayed.id===id&&(terminal||state.displayed.revision<=rev))){this.clearTimer(state.timer);state.displayed=null;state.timer=null;}
+    this.publish({type:'segment-retired',source:state.source,id,revision:rev,terminal,reason});this.watchQueue(state);
   }
-  async pump() {
-    if (this.busy || this.closed) return;
-    const keys = [...this.sources.keys()]; const start = (keys.indexOf(this.last) + 1) % (keys.length || 1);
-    const order = keys.slice(start).concat(keys.slice(0, start));
-    // Drop/rewrite partial work first; finals get round-robin service across sources.
-    let key = order.find(k => this.sources.get(k).finals.length);
-    if (!key) key = order.find(k => this.sources.get(k).partial);
-    if (!key) return;
-    const state = this.sources.get(key), job = state.finals.shift() || state.partial;
-    if (job === state.partial) state.partial = null;
-    this.last = key; this.busy = true; this.controller = new AbortController();
-    const started = this.now(), queueAgeMs = started - job.queuedAt;
-    if (queueAgeMs > 3000) this.status(job.source, 'delayed', `Transcription delayed ${Math.round(queueAgeMs / 1000)} seconds.`);
-    try {
-      const text = await this.infer(job.pcm, this.controller.signal);
-      if (!this.closed && this.sources.get(key) === state && (job.final || job.id > state.finalized)) {
-        this.publish({ type: 'caption', source: job.source, id: job.id, final: job.final, text, capturedAt: job.capturedAt, inferenceMs: this.now() - started, queueAgeMs });
-        this.status(job.source, state.finals.length ? 'delayed' : 'capturing', `Last inference ${this.now() - started} ms; queue age ${queueAgeMs} ms${state.finals.length ? '; finalized audio is pending.' : '.'}`);
+  add(source,job){
+    const state=this.sources.get(source.id);
+    if(this.closed||!state||state.source.generation!==source.generation||!Number.isSafeInteger(job.id)||job.id<=0)return;
+    const revision=++state.revision;
+    if(!state.ledger.allows(job.id,revision,job.final)||!job.final&&job.id<=state.finalized)return;
+    // Convert the approximate wall-clock audio timestamp once; elapsed age then
+    // uses a monotonic clock, independent of later system clock adjustments.
+    const queuedAt=this.now(),queuedMonoAt=this.elapsedNow(),audioEndAt=Number.isFinite(job.audioEndAt)?Math.min(job.audioEndAt,queuedAt):queuedAt,item={...job,revision,source:state.source,queuedAt,queuedMonoAt,audioEndAt,freshAt:queuedMonoAt-Math.max(0,queuedAt-audioEndAt)};
+    if(job.final){
+      if(state.finalJobs.has(job.id))return;state.finalJobs.add(job.id);
+      state.finalized=Math.max(state.finalized,job.id);if(state.partial?.id<=job.id)state.partial=null;
+      if(state.finals.length===2){const skipped=state.finals.shift();this.retire(source,skipped.id,'Overload: an older finalized segment was skipped.',true,skipped.revision);this.health(state,'delayed','Overloaded: an older finalized segment was skipped.');}
+      state.finals.push(item);
+    }else state.partial=item;
+    this.watchQueue(state);this.pump();
+  }
+  watchQueue(state){
+    this.clearTimer(state.queueTimer);state.queueTimer=null;
+    if(!state.finals.length&&!state.partial){const queued=state.queuedSince!==null;state.queuedSince=null;if(queued&&this.active?.state!==state)this.health(state,'waiting','Waiting for current speech.');return;}
+    if(state.queuedSince===null){state.queuedSince=this.elapsedNow();if(this.busy)this.health(state,'transcribing','Speech is queued for transcription.');}
+    const delay=3001-(this.elapsedNow()-state.queuedSince);
+    if(delay<=0){this.health(state,'delayed','Speech is falling behind in the shared recognizer queue.');return;}
+    state.queueTimer=this.setTimer(()=>{if(!this.closed&&this.sources.get(state.source.id)===state)this.watchQueue(state);},delay);state.queueTimer?.unref?.();
+  }
+  prune(state){
+    for(const job of [...state.finals,...(state.partial?[state.partial]:[])]){
+      if(!state.ledger.allows(job.id,job.revision,job.final)||!job.final&&job.id<=state.finalized){state.finals=state.finals.filter(j=>j!==job);if(job.final)state.finalJobs.delete(job.id);if(state.partial===job)state.partial=null;continue;}
+      if(this.age(job)<=this.maxAgeMs)continue;
+      state.finals=state.finals.filter(j=>j!==job);if(state.partial===job)state.partial=null;
+      this.retire(state.source,job.id,'Queued audio exceeded the caption freshness limit.',job.final,job.revision);this.health(state,'delayed','Stale queued audio was skipped; waiting for current speech.');
+    }
+    this.watchQueue(state);
+  }
+  async pump(){
+    if(this.busy||this.closed)return;
+    for(const state of this.sources.values())this.prune(state);
+    const keys=[...this.sources.keys()],start=(keys.indexOf(this.last)+1)%(keys.length||1),order=keys.slice(start).concat(keys.slice(0,start));
+    let key=order.find(k=>this.sources.get(k).finals.length);if(!key)key=order.find(k=>this.sources.get(k).partial);if(!key)return;
+    const state=this.sources.get(key),job=state.finals.shift()||state.partial;if(job===state.partial)state.partial=null;
+    this.last=key;this.busy=true;this.active={state,job};this.watchQueue(state);this.controller=new AbortController();let handled=false;const started=this.elapsedNow(),queueAgeMs=started-job.queuedMonoAt;
+    this.health(state,state.failed?'recovering':queueAgeMs>3000?'delayed':'transcribing',state.failed?'Retrying local transcription; previous failure remains visible.':queueAgeMs>3000?'Transcribing delayed audio.':'Transcribing current speech.');
+    try{
+      const text=await this.infer(job.pcm,this.controller.signal);
+      if(this.closed||this.sources.get(key)!==state||!state.ledger.allows(job.id,job.revision,job.final)||!job.final&&job.id<=state.finalized)return;
+      if(this.age(job)>this.maxAgeMs){handled=true;this.retire(job.source,job.id,'Completed inference exceeded the caption freshness limit.',job.final,job.revision);this.health(state,'delayed','A stale transcription result was skipped; waiting for current speech.');return;}
+      handled=true;
+      if(!text?.trim())this.retire(job.source,job.id,'No recognizable speech in this transcription.',job.final,job.revision);
+      else{
+        state.ledger.mark(job.id,job.revision,{closed:job.final,cleared:job.final,final:job.final});
+        this.publish({type:'caption',source:job.source,id:job.id,revision:job.revision,final:job.final,text,capturedAt:job.capturedAt,audioEndAt:job.audioEndAt,inferenceMs:this.elapsedNow()-started,queueAgeMs});
+        if(job.final){if(state.displayed?.id<=job.id){this.clearTimer(state.timer);state.displayed=null;state.timer=null;}}
+        else this.expirePartial(state,key,job);
       }
-    } catch {
-      if (!this.closed && this.sources.get(key) === state) {
-        this.status(job.source, 'unavailable', 'Local transcription failed; new audio will be retried.');
-        this.publish({ type: 'reset', source: job.source });
-      }
-    } finally { this.busy = false; this.controller = null; this.pump(); }
+      state.failed=false;this.health(state,state.finals.length?'delayed':text?.trim()?'capturing':'waiting',state.finals.length?'Finalized audio is pending.':text?.trim()?'Transcription ready.':'Audio processed; no recognizable speech.',true);
+    }catch{
+      if(!this.closed&&this.sources.get(key)===state&&state.ledger.allows(job.id,job.revision,job.final)){handled=true;this.retire(job.source,job.id,'Local transcription failed.',job.final,job.revision);state.failed=true;this.health(state,'unavailable','Local transcription failed; new audio will be retried.');}
+    }finally{if(job.final)state.finalJobs.delete(job.id);this.busy=false;this.active=null;this.controller=null;if(!handled&&!this.closed&&this.sources.get(key)===state&&!state.failed&&!state.finals.length&&!state.partial)this.health(state,'waiting','Waiting for current speech.');this.pump();}
   }
-  close() { this.closed = true; this.sources.clear(); this.controller?.abort(); }
+  expirePartial(state,key,{id,revision,source,freshAt}){
+    this.clearTimer(state.timer);const display={id,revision};state.displayed=display;
+    state.timer=this.setTimer(()=>{if(!this.closed&&this.sources.get(key)===state&&state.displayed===display){this.retire(source,id,'Displayed partial exceeded the freshness limit.',false,revision);this.health(state,'delayed','An unfinished caption expired; waiting for current speech.');}},Math.max(1,this.maxAgeMs-Math.max(0,this.elapsedNow()-freshAt)+1));state.timer?.unref?.();
+  }
+  close(){this.closed=true;for(const key of [...this.sources.keys()])this.remove(key);this.controller?.abort();}
 }
 class SourceManager {
   constructor({ helper, scheduler, publish, threshold = 80, createCapture, now = Date.now }) {
@@ -54,10 +91,10 @@ class SourceManager {
     this.createCapture = createCapture || ((audio, status, reset) => new Capture(helper, audio, status, reset));
     this.slots = new Map(); this.generation = 0; this.paused = false; this.closed = false;
   }
-  status(source, state, message) { this.publish({ type: 'source-status', source, state, message }); }
+  status(source, state, message, recovered=false) { this.publish({ type: 'source-status', source, state, message, component:'capture', recovered }); }
   async remove(slot) {
     const entry = this.slots.get(slot); if (!entry) return;
-    this.slots.delete(slot); this.scheduler.remove(entry.source.id);
+    entry.captureEpoch=null;this.slots.delete(slot); this.scheduler.remove(entry.source.id);
     this.publish({ type: 'source-removed', source: entry.source }); await entry.capture?.close();
   }
   async configure(slot, descriptor) {
@@ -77,20 +114,25 @@ class SourceManager {
     if (!this.paused) await this.start(entry); else this.status(source, 'stopped', 'Paused');
   }
   async start(entry) {
+    const epoch=Symbol();entry.captureEpoch=epoch;
+    const current=()=>!this.closed&&!this.paused&&this.slots.get(entry.source.id)===entry&&entry.captureEpoch===epoch;
     const reset = () => {
       this.scheduler.remove(entry.source.id);
       entry.source = Object.freeze({ ...entry.source, generation: ++this.generation });
-      entry.segmenter = new Segmenter({ threshold: this.threshold });
+      const origin=entry.source,segmenter=new Segmenter({ threshold: this.threshold });entry.segmenter=segmenter;
+      const currentSegment=()=>current()&&entry.segmenter===segmenter&&entry.source===origin;
       // PCM sample offset + first-block arrival anchor gives approximate capture order.
       // Raw PCM pipe has no WASAPI QPC header; never claim sample-accurate cross-app timing.
       entry.anchor = null;
-      entry.segmenter.on('segment', job => this.scheduler.add(entry.source, { ...job, capturedAt: entry.anchor + job.captureOffsetMs }));
-      entry.push = pcm => { if (entry.anchor === null) entry.anchor = this.now() - pcm.length / 32; entry.segmenter.push(pcm); };
+      segmenter.on('segment', job => {if(currentSegment())this.scheduler.add(origin, { ...job, capturedAt: entry.anchor + job.captureOffsetMs, audioEndAt: entry.anchor+job.captureOffsetMs+job.pcm.length/32 });});
+      segmenter.on('retire', job => {if(currentSegment()){this.scheduler.retire(origin,job.id,job.reason);this.status(origin,'waiting',job.reason+' Listening for speech.');}});
+      segmenter.on('activity', event=>{if(currentSegment()&&!event.rejected)this.status(origin,event.active?'capturing':'waiting',event.active?'Capture active — speech detected.':'Capture active — listening for speech.');});
+      entry.push = pcm => { if(!currentSegment())return;if (entry.anchor === null) entry.anchor = this.now() - pcm.length / 32; segmenter.push(pcm); };
       this.scheduler.attach(entry.source); this.publish({ type: 'reset', source: entry.source });
     };
-    entry.capture = this.createCapture(pcm => { if (!this.paused && this.slots.get(entry.source.id) === entry) entry.push?.(pcm); },
-      (message, state = 'waiting') => { if (this.slots.get(entry.source.id) === entry) this.status(entry.source, state, message); },
-      () => { if (this.slots.get(entry.source.id) === entry && !this.paused) reset(); });
+    entry.capture = this.createCapture(pcm => { if (current()) entry.push?.(pcm); },
+      (message, state = 'recovering') => { if (current()) this.status(entry.source, state==='capturing'?'waiting':state, state==='capturing'?message+' — waiting for speech.':message,state==='capturing'); },
+      () => { if (current()) reset(); });
     reset();
     await entry.capture.select(entry.descriptor.kind === 'device' ? entry.descriptor.endpoint : entry.descriptor);
   }
@@ -98,7 +140,7 @@ class SourceManager {
     if (this.closed || this.paused === value) return;
     this.paused = value;
     for (const entry of this.slots.values()) {
-      this.scheduler.remove(entry.source.id); this.publish({ type: 'reset', source: entry.source });
+      entry.captureEpoch=null;this.scheduler.remove(entry.source.id);entry.source=Object.freeze({...entry.source,generation:++this.generation}); this.publish({ type: 'reset', source: entry.source });
       if (value) { await entry.capture?.close(); entry.capture = null; this.status(entry.source, 'stopped', 'Paused — no capture worker is running'); }
       else await this.start(entry);
     }

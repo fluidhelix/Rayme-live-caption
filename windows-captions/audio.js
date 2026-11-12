@@ -29,6 +29,7 @@ class Segmenter extends EventEmitter {
       if (!active) { this.pre.push(frame); if (this.pre.length > 12) this.pre.shift(); return; }
       this.captureOffsetMs = this.elapsedMs - 20 - this.pre.length * 20;
       this.id++; this.frames = this.pre; this.pre = [];
+      this.emit('activity', { active: true });
     }
     this.frames.push(frame); this.quiet = active ? 0 : this.quiet + 20; if (active) this.voiced += 20;
     const ms = this.frames.length * 20;
@@ -38,8 +39,11 @@ class Segmenter extends EventEmitter {
     }
   }
   finish() {
-    if (this.voiced >= 200) this.emit('segment', { id: this.id, captureOffsetMs: this.captureOffsetMs, pcm: Buffer.concat(this.frames), final: true });
+    const rejected=this.voiced<200;
+    if (!rejected) this.emit('segment', { id: this.id, captureOffsetMs: this.captureOffsetMs, pcm: Buffer.concat(this.frames), final: true });
+    else this.emit('retire', { id: this.id, reason: 'Brief sound did not contain enough speech to finalize.' });
     this.frames = []; this.quiet = 0; this.voiced = 0; this.lastPartial = 0;
+    this.emit('activity', { active: false, rejected });
   }
 }
 class Scheduler {
