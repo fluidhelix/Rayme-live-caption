@@ -29,7 +29,7 @@ public static class TranscriptPresentation {
     }
     static string Sentence(string text){
         string spoken=text.TrimEnd('"','\'','”','’',')');
-        if(spoken.Length==0||".!?…:;。！？".Contains(spoken[^1]))return text;
+        if(spoken.Length==0||char.IsPunctuation(spoken[^1]))return text;
         int end=spoken.Length;return text[..end]+"."+text[end..];
     }
     public static Transcript Build(CaptionState state,string slot) {

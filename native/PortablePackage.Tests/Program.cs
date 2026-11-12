@@ -103,7 +103,7 @@ static class Program{
         },name,seconds);return found!;
     }
     static void Set(AutomationElement field,string value)=>((ValuePattern)field.GetCurrentPattern(ValuePattern.Pattern)).SetValue(value);
-    static void SelectMode(int pid,string label){var combo=Find(pid,"Speech processing mode",ControlType.ComboBox);combo.SetFocus();((ExpandCollapsePattern)combo.GetCurrentPattern(ExpandCollapsePattern.Pattern)).Expand();AutomationElement? item=null;Until(()=>{item=combo.FindFirst(TreeScope.Descendants,new PropertyCondition(AutomationElement.NameProperty,label));return item!=null;},"Processing option "+label);((SelectionItemPattern)item!.GetCurrentPattern(SelectionItemPattern.Pattern)).Select();}
+    static void SelectMode(int pid,string label){var combo=Find(pid,"Speech processing mode",ControlType.ComboBox);Until(()=>combo.Current.IsEnabled,"Processing selector ready");combo.SetFocus();((ExpandCollapsePattern)combo.GetCurrentPattern(ExpandCollapsePattern.Pattern)).Expand();AutomationElement? item=null;Until(()=>{item=combo.FindFirst(TreeScope.Descendants,new PropertyCondition(AutomationElement.NameProperty,label));return item!=null;},"Processing option "+label);((SelectionItemPattern)item!.GetCurrentPattern(SelectionItemPattern.Pattern)).Select();}
     static void Invoke(AutomationElement button)=>((InvokePattern)button.GetCurrentPattern(InvokePattern.Pattern)).Invoke();
     sealed class Session:IDisposable{
         public Process Process=>Capture.Process;

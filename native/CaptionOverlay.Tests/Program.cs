@@ -79,7 +79,7 @@ static class Program {
         }
     }
     static void UsabilityTests(){
-        foreach(var (input,expected) in new[]{("Hello","Hello."),("Why?","Why?"),("Yes!","Yes!"),("Already.","Already."),("[laughter]","[laughter]"),("*sighing*","*sighing*"),("  More words  ","More words."),("He said “yes”","He said “yes.”"),("你好。","你好。"),("",""),("Wait…","Wait…"),("Hello [laughter]","Hello. [laughter]"),("Why? *sighing*","Why? *sighing*"),("[laughter] *sighing*","[laughter] *sighing*")})Check(TranscriptPresentation.Finish(input)==expected,"Natural final punctuation: "+input);
+        foreach(var (input,expected) in new[]{("Hello","Hello."),("Why?","Why?"),("Yes!","Yes!"),("Already.","Already."),("[laughter]","[laughter]"),("*sighing*","*sighing*"),("  More words  ","More words."),("He said “yes”","He said “yes.”"),("你好。","你好。"),("",""),("Wait…","Wait…"),("Continuing,","Continuing,"),("Listen:","Listen:"),("unfinished —","unfinished —"),("Hello [laughter]","Hello. [laughter]"),("Why? *sighing*","Why? *sighing*"),("[laughter] *sighing*","[laughter] *sighing*")})Check(TranscriptPresentation.Finish(input)==expected,"Natural final punctuation: "+input);
         var state=new CaptionState();state.Apply(Event("reset",A));
         Check(TranscriptPresentation.Slots(state).SequenceEqual(new[]{"a","b"}),"Even one application reserves both fixed transcript panels");
         state.Apply(Event("caption",A,1,text:"First draft"));Check(TranscriptPresentation.Build(state,"a").PartialText=="First draft","Partial occupies the live tail of its own panel");
