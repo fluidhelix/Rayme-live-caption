@@ -11,6 +11,7 @@ static class Program {
         catch (Exception ex) { Console.Error.WriteLine("FAIL: " + ex.Message); return 1; }
     }
     static void UnitTests() {
+        LifecycleTests();
         var s = new CaptionState(); s.Apply(Event("reset",A)); s.Apply(Event("reset",B));
         s.Apply(Event("caption",A,text:"[laughter]")); s.Apply(Event("caption",B,text:"*coughing*"));
         Check(s.Partials.Count == 2,"Independent partials");
@@ -76,6 +77,34 @@ static class Program {
             bool rejected = false; try { _ = new SessionClient(url); } catch (ArgumentException) { rejected = true; } Check(rejected,"Only exact authenticated loopback sessions accepted");
         }
     }
+    static void LifecycleTests(){
+        string Life(string type,Source source,long id,long revision,bool final=false,string text="words",bool terminal=true)=>JsonSerializer.Serialize(new{type,source=new{id=source.Id,generation=source.Generation,name=source.Name,identity=source.Identity},id,revision,final,text,terminal,capturedAt=id});
+        var s=new CaptionState();s.Apply(Event("reset",A));s.Apply(Event("reset",B));
+        s.Apply(Life("caption",A,1,1,text:"old"));s.Apply(Life("caption",A,2,2,text:"new"));s.Apply(Life("segment-retired",A,1,1));
+        Check(s.Partials["a"].Text=="new","Retiring an older segment cannot clear a newer partial");
+        s.Apply(Life("segment-retired",A,2,1,terminal:false));Check(s.Partials["a"].Text=="new","An old retirement revision cannot clear a newer hypothesis");
+        s.Apply(Life("segment-retired",A,2,3,terminal:false));s.Apply(Life("caption",A,2,2));s.Apply(Life("caption",A,1,100));Check(s.Partials.Count==0,"Cleared revisions and older segments cannot revive after partial removal");
+        s.Apply(Life("caption",A,2,4,text:"fresh"));Check(s.Partials["a"].Text=="fresh","A fresh revision may follow a nonterminal retirement");
+        s.Apply(Life("caption",A,2,5,text:""));Check(s.Partials.Count==0,"An empty partial clears only obsolete text");
+        s.Apply(Life("caption",A,2,6,true,"final"));Check(s.History.Count==1,"A later final survives an empty partial response");
+        s.Apply(Life("caption",A,4,8,true,"four"));s.Apply(Life("caption",A,3,7,true,"three"));Check(s.History.Select(c=>c.Text).SequenceEqual(new[]{"final","three","four"}),"Out-of-order finals preserve capture ordering and history");
+        s.Apply(Life("segment-retired",A,4,10));Check(s.History.Count==3,"Retirement never removes finalized history");
+        s.Apply(JsonSerializer.Serialize(new{type="source-status",source=new{id=A.Id,generation=A.Generation,name=A.Name,identity=A.Identity},state="unavailable",message="Local transcription failed."}));s.Apply(Event("reset",A));
+        Check(s.Sources["a"].State=="unavailable"&&s.Sources["a"].Message.Contains("failed"),"Caption resets preserve source failure information");
+        s.Apply(JsonSerializer.Serialize(new{type="reset",source=new{id=A.Id,generation=A.Generation,name=A.Name,identity=A.Identity},state="waiting",message="Do not overwrite health"}));Check(s.Sources["a"].State=="unavailable","Even a reset carrying status-looking fields is not a health transition");
+        Check(new SourceStatus(A,"stopped","Paused. Last failure: capture disconnected.").HasFailure,"Pausing retains a visible failure indication");
+        var resumed=A with{Generation=3};s.Apply(Event("reset",resumed));s.Apply(Life("caption",A,10,100));Check(s.Partials.Count==0&&s.History.Count==3,"New generations reject late results while retaining same-identity finalized history");
+        Check(s.Sources["a"].State=="unavailable","Reset during recovery does not report healthy waiting");
+        var advanced=resumed with{Generation=4};s.Apply(Life("segment-retired",advanced,1,2));s.Apply(Event("reset",advanced));s.Apply(Life("caption",advanced,1,3));Check(s.Partials.Count==0,"Retirement arriving before a generation reset is retained");
+        s.Apply(Event("source-removed",advanced));s.Apply(Event("source-status",advanced));s.Apply(Life("caption",advanced,2,4));Check(!s.Sources.ContainsKey("a")&&!s.Partials.ContainsKey("a"),"Removed generations cannot be recreated by statuses or results");
+        var status=JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(new{type="source-status",source=new{id=A.Id,generation=A.Generation,name=A.Name,identity=A.Identity},state="unavailable",message="Local transcription failed."}));
+        var partial=JsonSerializer.Deserialize<JsonElement>(Life("caption",A,2,3));
+        var metadata=new{generation=1,floor=0,finalized=1,latest=2,entries=new[]{new{id=1,revision=1,closed=true,cleared=true},new{id=2,revision=4,closed=false,cleared=true}}};
+        string snapshot=JsonSerializer.Serialize(new{type="snapshot",sources=new{a=status},history=new[]{JsonSerializer.Deserialize<JsonElement>(Life("caption",A,1,1,true,"kept"))},partials=new{a=partial},segments=new{a=metadata}});
+        s.Apply(snapshot);Check(s.Partials.Count==0&&s.History.Single().Text=="kept"&&s.Sources["a"].State=="unavailable","Reconnect snapshot carries retirement guards, history and persistent failure");
+        s.Apply(Life("caption",A,2,5,text:"current"));Check(s.Partials["a"].Text=="current","Newer data is accepted after snapshot retirement");
+        foreach(var state in new[]{"waiting","capturing","transcribing","delayed","unavailable","recovering","stopped"})Check(new SourceStatus(A,state,"detail").Label.Length>0,"Source health has a readable label: "+state);
+    }
     static async Task SessionTest() {
         // Test harness uses the same private stdin handoff and the production Node server.
         using var handoff = JsonDocument.Parse((await Console.In.ReadLineAsync())!);
@@ -93,6 +122,9 @@ static class Program {
                 Check(s.History.Count == 2 && s.Partials.Count == 0 && s.History[0].Source.Id == "a","Interleaved live partials and finals over real WebSocket");
                 await client.SendAsync(new {type="pause",paused=true});
             }
+            if(type=="status"&&doc.RootElement.GetProperty("message").GetString()=="stage-retired-partial")Check(s.Partials.Count==1&&s.Partials.ContainsKey("b"),"Segment retirement is source-specific over authenticated WebSocket");
+            if(type=="status"&&doc.RootElement.GetProperty("message").GetString()=="stage-newer-partial")Check(s.Partials["a"].Id==3&&s.Partials.ContainsKey("b"),"Older retirement cannot remove newer live text over WebSocket");
+            if(type=="status"&&doc.RootElement.GetProperty("message").GetString()=="stage-preserved-error")Check(s.Sources["a"].State=="unavailable"&&s.Sources["a"].Message.Contains("failed")&&s.History.Count==2,"Production reset preserves inference failure and finalized history");
             if (type == "paused") {
                 if (s.Paused) { Check(s.Paused,"Pause acknowledgement"); await client.SendAsync(new {type="clear"}); }
                 else { Check(!s.Paused,"Resume acknowledgement"); await client.SendAsync(new {type="configure",slot="a",id="11:101",enabled=true}); }

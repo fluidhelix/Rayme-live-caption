@@ -34,7 +34,7 @@ test('round-robin finals, exactly one active request, bounded queues and overloa
  assert.equal(q.sources.get('a').finals.length,2);assert.equal(q.sources.get('b').finals.length,2);assert.ok(warnings.length);
  clock=10000;
  while(waits.length){waits.shift()();await tick();}
- order.push(...events.map(e=>e.source.id));assert.deepEqual(order,['a','b','a','b','a']);assert.equal(max,1);assert.ok(events.some(e=>e.queueAgeMs>=10000));q.close();
+ const captions=events.filter(e=>e.type==='caption');assert.equal(events.filter(e=>e.type==='segment-retired').length,32);order.push(...captions.map(e=>e.source.id));assert.deepEqual(order,['a','b','a','b','a']);assert.equal(max,1);assert.ok(events.some(e=>e.queueAgeMs>=10000));q.close();
 });
 test('PID reuse/restart/removal while transcription is pending never relabels or leaks stale text',async()=>{
  const waits=[],events=[];const q=new SourceScheduler(()=>new Promise(r=>waits.push(r)),e=>events.push(e),()=>{});

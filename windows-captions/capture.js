@@ -14,7 +14,7 @@ class Capture {
   async select(device = 'default') {
     const gen = ++this.generation; clearTimeout(this.retry); this.retry = null; const old = this.child; this.child = null;
     await stopChild(old); if (gen !== this.generation) return;
-    this.discontinuity(); this.status('Connecting to playback device…');
+    this.discontinuity(); this.status('Connecting to playback device…', 'recovering');
     const args = typeof device === 'object' ? ['--process', String(device.pid), '--started', device.started] : ['--device', device];
     const child = this.spawnChild(this.exe, args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }); this.child = child;
     child.stdout.on('data', data => { if (gen === this.generation) this.audio(data); });

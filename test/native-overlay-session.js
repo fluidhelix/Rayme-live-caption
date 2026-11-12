@@ -14,7 +14,11 @@ async function run() {
   try {
     ui=await createUI({port:0,onRefresh:()=>{
       refreshes++;
-      if(refreshes===1){caption(a,1,false,'[laughter]',10);caption(b,1,false,'*coughing*',20);caption(b,1,true,'*sighing*',20);caption(a,1,true,'Literal <text> [laughter]',10);caption(a,1,true,'Duplicate suppressed',10);status('stage-captions');}
+      if(refreshes===1){caption(a,1,false,'[laughter]',10);caption(b,1,false,'*coughing*',20);caption(b,1,true,'*sighing*',20);caption(a,1,true,'Literal <text> [laughter]',10);caption(a,1,true,'Duplicate suppressed',10);status('stage-captions');
+        ui.publish({type:'caption',source:a,id:2,revision:1,final:false,text:'retire A'});ui.publish({type:'caption',source:b,id:2,revision:1,final:false,text:'keep B'});
+        ui.publish({type:'segment-retired',source:a,id:2,revision:2,terminal:false});ui.publish({type:'caption',source:a,id:2,revision:1,final:false,text:'late A'});status('stage-retired-partial');
+        ui.publish({type:'caption',source:a,id:3,revision:3,final:false,text:'newer A'});ui.publish({type:'segment-retired',source:a,id:2,revision:2,terminal:true});status('stage-newer-partial');
+        ui.publish({type:'source-status',source:a,component:'inference',state:'unavailable',message:'Local transcription failed.'});ui.publish({type:'reset',source:a});ui.publish({type:'segment-retired',source:b,id:2,revision:2,terminal:false});status('stage-preserved-error');}
       else {ui.publish({type:'source-removed',source:a});ui.publish({type:'reset',source:next});caption(b,2,true,'B remains attributed',25);caption(next,1,false,'New application partial',30);caption(next,1,true,'New application final',30);status('stage-reconnect');}
     },onPause:paused=>{pauses.push(paused);ui.publish({type:'paused',paused});},onConfigure:(slot,descriptor)=>{assert.equal(slot,'a');assert.equal(descriptor.id,'11:101');configured=true;status('stage-complete');}});
     ui.publish({type:'applications',supported:true,apps:[{kind:'process',id:'11:101',name:'New Application A',pid:11,started:'101'}]});

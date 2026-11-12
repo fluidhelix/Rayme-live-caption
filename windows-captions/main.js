@@ -48,6 +48,8 @@ async function main() {
   }
   try {
     const threshold = Number(process.env.WINDOWS_SILENCE_RMS || 80);
+    const captionMaxAgeMs=Number(process.env.CAPTION_MAX_AGE_MS||15000);
+    if(!Number.isFinite(captionMaxAgeMs)||captionMaxAgeMs<1000||captionMaxAgeMs>120000)throw Error('Caption freshness must be between 1000 and 120000 ms.');
     if (!Number.isFinite(threshold) || threshold < 0 || threshold > 32767) throw new Error('The audio sensitivity setting is invalid.');
     const refresh = async () => {
       ui.publish({ type: 'devices', devices: await listDevices(helper), selected: process.env.WINDOWS_AUDIO_DEVICE || 'default' });
@@ -62,7 +64,7 @@ async function main() {
       try { if(portable)await whisper.start(model,mode);else await whisper.start(message=>ui.publish({type:'status',message})); }
       catch(error) { await whisper.close();throw Error('The speech model could not load. Choose a compatible ggml model or another processing mode. '+error.message); }
       if (stopped) return;
-      scheduler = new SourceScheduler((pcm, signal) => whisper.infer(pcm, signal), event => ui.publish(event), (source, state, message) => ui.publish({ type: 'source-status', source, state, message }));
+      scheduler = new SourceScheduler((pcm, signal) => whisper.infer(pcm, signal), event => ui.publish(event), (source, state, message, health) => ui.publish({ type: 'source-status', source, state, message, ...health }), Date.now, {maxAgeMs:captionMaxAgeMs});
       manager = new SourceManager({ helper, scheduler, publish: event => ui.publish(event), threshold });
       manager.generation=sourceGeneration;
       ui.publish({type:'paused',paused:false});
