@@ -6,7 +6,7 @@ const pins=require('./assets.json');
 const backend=['audio.js','capture.js','main.js','native-overlay.js','server.js','setup.js','sources.js','whisper.js','models.json','overlay.html','processing.js','runtime-device.js'];
 function hash(file){return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');}
 function walk(dir){return fs.readdirSync(dir,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(path.join(dir,e.name)):[path.join(dir,e.name)]);}
-function assemble({repo,out,launcher,overlay,helper,node,whisper,cuda,licenses,commit}){
+function assemble({repo,out,launcher,overlay,helper,node,whisper,cuda,licenses,commit,nativeRuntimeKey,nativeRuntimeProducerCommit}){
   fs.mkdirSync(out,{recursive:true});if(fs.readdirSync(out).length)throw Error('Package output must be a new empty directory');
   const copy=(from,to)=>{const dest=path.join(out,to);fs.mkdirSync(path.dirname(dest),{recursive:true});fs.copyFileSync(from,dest);};
   copy(launcher,'Rayme.exe');copy(overlay,'App/native/CaptionOverlay.exe');copy(helper,'App/native/LoopbackCapture.exe');
@@ -20,7 +20,7 @@ function assemble({repo,out,launcher,overlay,helper,node,whisper,cuda,licenses,c
   copy(path.join(node,'LICENSE'),'Licenses/Node.txt');copy(path.join(ws,'LICENSE'),'Licenses/ws.txt');
   copy(path.join(repo,'distribution/README.txt'),'READ-ME-FIRST.txt');copy(path.join(repo,'distribution/RELEASE_NOTES.md'),'RELEASE-NOTES.md');
   copy(path.join(repo,'distribution/LICENSE-RAYME.txt'),'LICENSE.txt');
-  const manifest={version:pins.version,channel:'prerelease',commit,node:pins.node.version,dotnet:pins.dotnetRuntime,whisper:pins.whisper.commit,cuda:pins.cuda.version,cudaArchitectures:pins.cuda.architectures,gpuHardwareValidation:'Not certified by hosted CI; actual backend/evidence are reported at runtime.',modelIncluded:false};
+  const manifest={version:pins.version,channel:'prerelease',commit,node:pins.node.version,dotnet:pins.dotnetRuntime,whisper:pins.whisper.commit,cuda:pins.cuda.version,cudaArchitectures:pins.cuda.architectures,nativeRuntimeKey,nativeRuntimeProducerCommit,gpuHardwareValidation:'Not certified by hosted CI; actual backend/evidence are reported at runtime.',modelIncluded:false};
   fs.writeFileSync(path.join(out,'VERSION.json'),JSON.stringify(manifest,null,2)+'\n');
   const integrity={};for(const file of walk(out).sort())integrity[path.relative(out,file).replaceAll('\\','/')]=hash(file);
   fs.writeFileSync(path.join(out,'INTEGRITY.json'),JSON.stringify(integrity,null,2)+'\n');

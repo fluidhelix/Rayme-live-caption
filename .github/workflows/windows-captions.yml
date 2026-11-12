@@ -12,11 +12,143 @@ on:
 permissions:
   contents: read
 jobs:
-  portable:
-    needs: [build-test, caption-overlay, speech-integration]
+  runtime-inputs:
     runs-on: windows-2022
-    # CUDA compilation took about 70 minutes; preserve time for all acceptance gates.
+    timeout-minutes: 10
+    outputs:
+      key: ${{ steps.identity.outputs.key }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.23.5'
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        with:
+          vsversion: '2022'
+          arch: x64
+      - id: identity
+        name: Hash native inputs and actual compiler/SDK/tool versions
+        shell: pwsh
+        run: ./distribution/runtime-inputs.ps1 -OutputFile artifacts/native-inputs.json
+  whisper-runtime:
+    if: github.event_name != 'pull_request'
+    needs: runtime-inputs
+    runs-on: windows-2022
     timeout-minutes: 120
+    permissions:
+      contents: read
+      actions: read
+    concurrency:
+      group: native-${{ needs.runtime-inputs.outputs.key }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.23.5'
+      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        with:
+          vsversion: '2022'
+          arch: x64
+      - name: Verify this runner has the exact expected native toolchain
+        shell: pwsh
+        run: |
+          ./distribution/runtime-inputs.ps1 -OutputFile artifacts/native-inputs.json
+          $actual = (Get-Content artifacts/native-inputs.json -Raw | ConvertFrom-Json).key
+          if ($actual -cne '${{ needs.runtime-inputs.outputs.key }}') { throw 'Native toolchain changed between jobs; rerun identity resolution' }
+      - uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
+        id: native-cache
+        with:
+          path: artifacts/whisper-runtime
+          key: ${{ needs.runtime-inputs.outputs.key }}
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        id: existing
+        env:
+          RUNTIME_KEY: ${{ needs.runtime-inputs.outputs.key }}
+        with:
+          script: |
+            const find = require('./distribution/find-runtime.cjs');
+            const run = await find({github,context,key:process.env.RUNTIME_KEY,attempts:1,allowMissing:true});
+            core.setOutput('run_id',run || '');
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        if: steps.native-cache.outputs.cache-hit != 'true' && steps.existing.outputs.run_id != ''
+        with:
+          name: rayme-${{ needs.runtime-inputs.outputs.key }}
+          path: artifacts/whisper-runtime
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.existing.outputs.run_id }}
+      - name: Compile pinned CPU/CUDA only when no exact verified bundle exists
+        if: steps.native-cache.outputs.cache-hit != 'true' && steps.existing.outputs.run_id == ''
+        shell: pwsh
+        run: ./distribution/build-whisper.ps1 -OutputDirectory artifacts/whisper-runtime -IdentityFile artifacts/native-inputs.json
+      - name: Require every SHA256, both executable help checks and embedded UTF-8 manifests
+        shell: pwsh
+        run: |
+          node distribution/runtime-bundle.js verify artifacts/whisper-runtime '${{ needs.runtime-inputs.outputs.key }}'
+          if ($LASTEXITCODE -ne 0) { throw 'Native runtime hash/identity verification failed' }
+          foreach ($kind in @('cpu', 'cuda')) {
+            & "./artifacts/whisper-runtime/$kind/whisper-server.exe" --help
+            if ($LASTEXITCODE -ne 0) { throw "$kind runtime cannot execute" }
+          }
+          . ./distribution/whisper-common.ps1
+          Assert-WhisperManifests (Resolve-Path artifacts/whisper-runtime).Path artifacts/native-manifests
+      # Publish BEFORE application packaging/acceptance, even if those later fail.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rayme-${{ needs.runtime-inputs.outputs.key }}
+          path: artifacts/whisper-runtime/
+          retention-days: 90
+          compression-level: 1
+          overwrite: true
+          if-no-files-found: error
+      - uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        with:
+          path: artifacts/whisper-runtime
+          key: ${{ needs.runtime-inputs.outputs.key }}
+  runtime-for-pr:
+    if: github.event_name == 'pull_request'
+    needs: runtime-inputs
+    runs-on: ubuntu-latest
+    timeout-minutes: 130
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '22.23.5'
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
+        id: producer
+        env:
+          RUNTIME_KEY: ${{ needs.runtime-inputs.outputs.key }}
+        with:
+          script: |
+            const find = require('./distribution/find-runtime.cjs');
+            core.setOutput('run_id',await find({github,context,key:process.env.RUNTIME_KEY}));
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: rayme-${{ needs.runtime-inputs.outputs.key }}
+          path: artifacts/whisper-runtime
+          github-token: ${{ github.token }}
+          run-id: ${{ steps.producer.outputs.run_id }}
+      - name: Verify exact producer identity and SHA256 before PR packaging
+        run: node distribution/runtime-bundle.js verify artifacts/whisper-runtime '${{ needs.runtime-inputs.outputs.key }}'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: rayme-${{ needs.runtime-inputs.outputs.key }}
+          path: artifacts/whisper-runtime/
+          compression-level: 1
+          overwrite: true
+          if-no-files-found: error
+  portable:
+    needs: [build-test, caption-overlay, speech-integration, runtime-inputs, whisper-runtime, runtime-for-pr]
+    if: always() && !cancelled() && needs.build-test.result == 'success' && needs.caption-overlay.result == 'success' && needs.speech-integration.result == 'success' && needs.runtime-inputs.result == 'success' && (needs.whisper-runtime.result == 'success' || needs.runtime-for-pr.result == 'success')
+    # Server 2025 satisfies the launcher's preserved >=22000 API/build requirement.
+    runs-on: windows-2025
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - name: Use a temporary NuGet package directory
@@ -31,14 +163,14 @@ jobs:
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: '10.0.404'
-      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
-        with:
-          vsversion: '2022'
-          arch: x64
       - run: npm ci --no-audit --no-fund
-      - name: Build pinned CPU/CUDA runtimes and complete portable application
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: rayme-${{ needs.runtime-inputs.outputs.key }}
+          path: artifacts/whisper-runtime
+      - name: Publish app and assemble ZIP using the exact verified native runtimes
         shell: pwsh
-        run: ./distribution/build.ps1
+        run: ./distribution/build.ps1 -WhisperRuntimeDirectory artifacts/whisper-runtime -WhisperRuntimeKey '${{ needs.runtime-inputs.outputs.key }}'
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
         with:
           name: pinned-speech-test-inputs
@@ -199,6 +331,8 @@ jobs:
       - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: '10.0.404'
+      - name: Launcher platform, integrity and bounded diagnostic regressions
+        run: dotnet run --project native/RaymeLauncher.Tests -c Release
       - name: Native conversion and policy tests (no audio endpoint required)
         run: dotnet run --project native/LoopbackCapture.Tests -c Release
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065

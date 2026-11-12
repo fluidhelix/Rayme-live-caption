@@ -18,6 +18,8 @@ if(require.main===module){
   const node=path.join(root,'App/node/node.exe');assert.equal(execFileSync(node,['--version'],{encoding:'utf8',env:{...process.env,PATH:system}}).trim(),'v'+require('../../distribution/assets.json').node.version);
   for(const kind of ['cpu','cuda'])execFileSync(path.join(root,`App/whisper/${kind}/whisper-server.exe`),['--help'],{cwd:path.join(root,`App/whisper/${kind}`),env:{...process.env,PATH:system},stdio:'pipe'});
   assert.equal(JSON.parse(fs.readFileSync(path.join(root,'VERSION.json'))).modelIncluded,false);
+  assert.match(JSON.parse(fs.readFileSync(path.join(root,'VERSION.json'))).nativeRuntimeKey,/^whisper-win-x64-v1-[a-f0-9]{64}$/);
+  assert.match(JSON.parse(fs.readFileSync(path.join(root,'VERSION.json'))).nativeRuntimeProducerCommit,/^[a-f0-9]{40}$/);
   assert.equal(JSON.parse(fs.readFileSync(path.join(root,'App/backend/models.json'))).models[0].id,'large-v3-turbo');
   console.log('PASS: complete package manifest, allowlist, real x64 executables, CPU DLL availability, pinned bundled Node and production model catalog');
 }

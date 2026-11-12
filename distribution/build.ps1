@@ -1,4 +1,4 @@
-param([string]$OutputDirectory = 'artifacts/release', [string]$Commit = $env:GITHUB_SHA)
+param([Parameter(Mandatory)][string]$WhisperRuntimeDirectory, [Parameter(Mandatory)][string]$WhisperRuntimeKey, [string]$OutputDirectory = 'artifacts/release', [string]$Commit = $env:GITHUB_SHA)
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path "$PSScriptRoot/..").Path
 $pins = Get-Content "$PSScriptRoot/assets.json" -Raw | ConvertFrom-Json
@@ -8,10 +8,7 @@ New-Item -ItemType Directory -Force $OutputDirectory | Out-Null
 $output = (Resolve-Path $OutputDirectory).Path
 $work = Join-Path $output 'build'
 New-Item -ItemType Directory -Force $work | Out-Null
-function Fetch-Verified($url, $file, $expected) {
-    if (!(Test-Path $file)) { Invoke-WebRequest $url -OutFile "$file.part"; Move-Item "$file.part" $file }
-    if ((Get-FileHash $file -Algorithm SHA256).Hash.ToLowerInvariant() -ne $expected) { throw "Pinned download checksum mismatch: $file" }
-}
+. "$PSScriptRoot/whisper-common.ps1"
 Fetch-Verified $pins.node.url "$work/node.zip" $pins.node.sha256
 Expand-Archive -Force "$work/node.zip" "$work/node"
 $node = "$work/node/node-v$($pins.node.version)-win-x64"
@@ -31,53 +28,14 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Locked production dependency install failed' }
     if ((Get-FileHash -LiteralPath $lockFile -Algorithm SHA256).Hash -cne $lockHash) { throw 'Production npm lockfile changed during ci' }
 } finally { Pop-Location }
-Fetch-Verified $pins.whisper.url "$work/whisper.tar.gz" $pins.whisper.sha256
-& tar -xzf "$work/whisper.tar.gz" -C $work
-if ($LASTEXITCODE -ne 0) { throw 'Whisper extraction failed' }
-$source = "$work/whisper.cpp-$($pins.whisper.commit)"
-$configure = @('-S', $source, '-B', "$work/cpu", '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_POLICY_VERSION_MINIMUM=3.10', '-DCMAKE_POLICY_DEFAULT_CMP0091=NEW', '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded', '-DGGML_NATIVE=OFF', '-DGGML_CUDA=OFF', '-DGGML_OPENMP=OFF', '-DGGML_AVX=OFF', '-DGGML_AVX2=OFF', '-DGGML_FMA=OFF', '-DGGML_F16C=OFF', '-DWHISPER_BUILD_TESTS=OFF', '-DWHISPER_CURL=OFF')
-$pathmap = '/pathmap:"' + $source.Replace('\','/') + '"=/_/whisper'
-# The pinned server uses narrow main(argv), while its model loader explicitly
-# decodes UTF-8 to UTF-16. Windows' documented per-process UTF-8 code page keeps
-# argv consistent with that loader for all user/model directory names.
-$manifest = (Join-Path $PSScriptRoot 'whisper-utf8.manifest').Replace('\','/')
-# CMake merges .manifest target sources for both VS and Ninja. Do not use
-# global linker flags: those also affect CUDA's temporary compiler probes.
-Add-Content -Path "$source/examples/server/CMakeLists.txt" -Encoding utf8 -Value "`ntarget_sources(whisper-server PRIVATE `"$manifest`")"
-$configure += @("-DCMAKE_C_FLAGS=$pathmap", "-DCMAKE_CXX_FLAGS=$pathmap")
-& cmake @configure
-if ($LASTEXITCODE -ne 0) { throw 'CPU Whisper configure failed' }
-& cmake --build "$work/cpu" --config Release --target whisper-server --parallel 2
-if ($LASTEXITCODE -ne 0) { throw 'CPU Whisper build failed' }
-$server = Get-ChildItem "$work/cpu/bin" -Recurse -Filter whisper-server.exe | Select-Object -First 1
-if (!$server) { throw 'CPU Whisper executable missing' }
-& $server.FullName --help
-if ($LASTEXITCODE -ne 0) { throw 'Compiled CPU runtime cannot execute' }
-# Merge only pinned NVIDIA toolkit components for BUILDING. No toolkit/compiler is shipped.
-$toolkit = "$work/cuda-toolkit"
-New-Item -ItemType Directory -Force $toolkit | Out-Null
-foreach ($component in $pins.cuda.components.PSObject.Properties) {
-    $name = $component.Name; $asset = $component.Value
-    Fetch-Verified $asset.url "$work/$name.zip" $asset.sha256
-    Expand-Archive -Force "$work/$name.zip" "$work/$name"
-    $componentRoot = (Get-ChildItem "$work/$name" -Directory | Select-Object -First 1).FullName
-    Get-ChildItem $componentRoot | Where-Object { $_.Name -ne 'LICENSE' } | ForEach-Object { Copy-Item $_.FullName $toolkit -Recurse -Force }
+$runtime = (Resolve-Path $WhisperRuntimeDirectory).Path
+& node "$PSScriptRoot/runtime-bundle.js" verify $runtime $WhisperRuntimeKey
+if ($LASTEXITCODE -ne 0) { throw 'Reusable native runtime integrity/identity check failed' }
+$runtimeInfo = Get-Content "$runtime/RUNTIME.json" -Raw | ConvertFrom-Json
+foreach ($kind in @('cpu', 'cuda')) {
+    & "$runtime/$kind/whisper-server.exe" --help
+    if ($LASTEXITCODE -ne 0) { throw "Reusable $kind runtime cannot execute" }
 }
-$cudaConfigure = @('-S', $source, '-B', "$work/cuda-build", '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_POLICY_VERSION_MINIMUM=3.10', '-DCMAKE_POLICY_DEFAULT_CMP0091=NEW', '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded', "-DCMAKE_CUDA_COMPILER=$toolkit/bin/nvcc.exe", "-DCUDAToolkit_ROOT=$toolkit", '-DCMAKE_CUDA_ARCHITECTURES=86;89', '-DGGML_NATIVE=OFF', '-DGGML_CUDA=ON', '-DGGML_CUDA_NO_VMM=ON', '-DGGML_OPENMP=OFF', '-DGGML_AVX=OFF', '-DGGML_AVX2=OFF', '-DGGML_FMA=OFF', '-DGGML_F16C=OFF', '-DWHISPER_BUILD_TESTS=OFF', '-DWHISPER_CURL=OFF')
-$cudaConfigure += @("-DCMAKE_C_FLAGS=$pathmap", "-DCMAKE_CXX_FLAGS=$pathmap", "-DCMAKE_CUDA_FLAGS=-Xcompiler=$pathmap")
-& cmake @cudaConfigure
-if ($LASTEXITCODE -ne 0) { throw 'CUDA Whisper configure failed' }
-& cmake --build "$work/cuda-build" --target whisper-server --parallel 2
-if ($LASTEXITCODE -ne 0) { throw 'CUDA Whisper build failed' }
-$cudaServer = Get-ChildItem "$work/cuda-build/bin" -Recurse -Filter whisper-server.exe | Select-Object -First 1
-if (!$cudaServer) { throw 'CUDA server executable missing' }
-$cuda = "$work/cuda-runtime"
-New-Item -ItemType Directory -Force $cuda | Out-Null
-Copy-Item "$($cudaServer.DirectoryName)/*.dll" $cuda
-Copy-Item $cudaServer.FullName $cuda
-foreach ($dll in @('cudart64_12.dll', 'cublas64_12.dll', 'cublasLt64_12.dll')) { Copy-Item "$toolkit/bin/$dll" $cuda }
-& "$cuda/whisper-server.exe" --help
-if ($LASTEXITCODE -ne 0) { throw 'CUDA executable/DLL startup check failed (does not verify GPU inference)' }
 function Publish-Native($project, $dest) {
     & dotnet restore "$repo/native/$project" -r win-x64 --locked-mode '-p:PublishSingleFile=true' "-p:RuntimeFrameworkVersion=$($pins.dotnetRuntime)"
     if ($LASTEXITCODE -ne 0) { throw "Locked native restore failed: $project" }
@@ -89,7 +47,7 @@ Publish-Native CaptionOverlay "$work/overlay"
 Publish-Native LoopbackCapture "$work/helper"
 $legal = "$work/licenses"
 New-Item -ItemType Directory -Force $legal | Out-Null
-Copy-Item "$source/LICENSE" "$legal/WhisperCpp.txt"
+Copy-Item "$runtime/licenses/*.txt" $legal
 Fetch-Verified $pins.modelLicense.url "$legal/OpenAI-Whisper.txt" $pins.modelLicense.sha256
 Copy-Item "$PSScriptRoot/legal/*.txt" $legal
 $nuget = if ($env:NUGET_PACKAGES) { $env:NUGET_PACKAGES } else { Join-Path $HOME '.nuget/packages' }
@@ -98,23 +56,11 @@ Copy-Item "$nuget/microsoft.netcore.app.runtime.win-x64/$($pins.dotnetRuntime)/T
 Copy-Item "$nuget/microsoft.windowsdesktop.app.runtime.win-x64/$($pins.dotnetRuntime)/LICENSE" "$legal/DotNet-Desktop.txt"
 $package = "$output/Rayme-Smart-Live-Captions"
 if (Test-Path $package) { throw 'Package output already exists. Use a clean build directory.' }
-$options = @{ repo=$repo; out=$package; launcher="$work/launcher/Rayme.exe"; overlay="$work/overlay/CaptionOverlay.exe"; helper="$work/helper/LoopbackCapture.exe"; node=$node; whisper=$server.DirectoryName; cuda=$cuda; licenses=$legal; commit=$Commit }
+$options = @{ repo=$repo; out=$package; launcher="$work/launcher/Rayme.exe"; overlay="$work/overlay/CaptionOverlay.exe"; helper="$work/helper/LoopbackCapture.exe"; node=$node; whisper="$runtime/cpu"; cuda="$runtime/cuda"; licenses=$legal; commit=$Commit; nativeRuntimeKey=$runtimeInfo.key; nativeRuntimeProducerCommit=$runtimeInfo.producerCommit }
 $options | ConvertTo-Json | Set-Content "$work/assemble.json" -Encoding utf8
 & node "$PSScriptRoot/assemble.js" "$work/assemble.json"
 if ($LASTEXITCODE -ne 0) { throw 'Package allowlist/integrity validation failed' }
-# Inspect the actual packaged PE resources; a sidecar manifest is not sufficient.
-foreach ($kind in @('cpu', 'cuda')) {
-    $embedded = "$work/$kind-server.embedded.manifest"
-    & mt.exe "-inputresource:$package/App/whisper/$kind/whisper-server.exe;#1" "-out:$embedded"
-    if ($LASTEXITCODE -ne 0) { throw "Could not extract packaged $kind Whisper manifest" }
-    $document = [System.Xml.XmlDocument]::new()
-    $document.Load($embedded)
-    $namespaces = [System.Xml.XmlNamespaceManager]::new($document.NameTable)
-    $namespaces.AddNamespace('ws', 'http://schemas.microsoft.com/SMI/2019/WindowsSettings')
-    $codePages = @($document.SelectNodes('//ws:activeCodePage', $namespaces))
-    if ($codePages.Count -ne 1 -or $codePages[0].InnerText.Trim() -cne 'UTF-8') { throw "Packaged $kind Whisper is missing its UTF-8 activeCodePage" }
-    Write-Host "PASS packaged $kind whisper-server RT_MANIFEST/#1 activeCodePage=UTF-8"
-}
+Assert-WhisperManifests "$package/App/whisper" "$work/manifest-diagnostics"
 $zip = "$output/Rayme-Smart-Live-Captions-v$($pins.version)-win-x64.zip"
 Compress-Archive -Path $package -DestinationPath $zip
 $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()

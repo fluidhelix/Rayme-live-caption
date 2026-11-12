@@ -4,18 +4,29 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows.Automation;
+using Rayme.Testing;
 
 static class Program{
     static int checks;
     static string package="",data="",model="";
+    static readonly string diagnostics=Path.GetFullPath("artifacts/portable-diagnostics");
+    static int sessionNumber;
+    static string Sanitize(string text)=>text.Replace(package,"[package]").Replace(data,"[settings]").Replace(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),"[profile]");
     [DllImport("user32.dll")]static extern bool PostMessage(IntPtr window,uint message,IntPtr w,IntPtr l);
     static void Check(bool value,string why){if(!value)throw new Exception(why);checks++;Console.WriteLine("PASS "+why);}
-    static void Until(Func<bool> predicate,string why,int seconds=30){var end=DateTime.UtcNow.AddSeconds(seconds);while(DateTime.UtcNow<end){if(predicate())return;Thread.Sleep(100);}throw new Exception("Timed out: "+why);}
+    static void Until(Func<bool> predicate,string why,int seconds=30){var end=DateTime.UtcNow.AddSeconds(seconds);while(DateTime.UtcNow<end){if(predicate())return;Thread.Sleep(100);}throw new TimeoutException("Timed out: "+why);}
     [STAThread]static int Main(string[] args){
         try{
             package=Path.GetFullPath(args[0]);model=Path.GetFullPath(args[1]);data=Path.Combine(Path.GetTempPath(),"Rayme données 日本 "+Guid.NewGuid());Directory.CreateDirectory(data);
             Check(package.Contains(' ')&&package.Any(c=>c>127),"Extracted ZIP is tested from a spaced, non-ASCII directory");
-            using(var verify=Start("--diagnostics --verify-package")){Check(verify.WaitForExit(30000)&&verify.ExitCode==0,"Direct Rayme.exe verifies the complete ZIP without global runtime paths");}
+            using(var verify=new DiagnosticCapture(Start("--diagnostics --verify-package"),Path.Combine(diagnostics,"launcher-verify.json"),Sanitize)){
+                bool exited=verify.Process.WaitForExit(30000);verify.TimedOut=!exited;
+                if(!exited)verify.Terminate();
+                verify.Flush();verify.Save();Console.WriteLine("Launcher verification: "+verify.Summary());
+                Check(exited,"Rayme.exe verification timed out: "+verify.Summary());
+                Check(verify.Process.ExitCode==0,"Rayme.exe verification returned a nonzero exit: "+verify.Summary());
+                Check(verify.Summary().Contains("package-verified"),"Direct Rayme.exe verifies the complete ZIP without global runtime paths");
+            }
             var browsers=BrowserPids();
             using(var session=new Session()){
                 session.Wait("setup-required");var overlay=Overlay();int pid=overlay.Id;
@@ -47,8 +58,15 @@ static class Program{
             using(var session=new Session()){
                 session.Wait("speech-ready",180);Check(!session.Events.Contains("setup-required"),"Saved-model startup uses the local model without downloading");
                 int[] owned=OwnedPids(session);Overlay().Kill();
-                var cancel=Find(session.Process.Id,"Cancel",ControlType.Button,30);Check(owned.All(Gone),"Unexpected overlay failure stops owned processes before offering recovery");
-                Invoke(cancel);Check(session.Process.WaitForExit(10000)&&session.Process.ExitCode==2,"Unexpected failure offers Cancel rather than pretending it was user Quit");
+                Check(session.Process.WaitForExit(20000)&&session.Process.ExitCode==2,"Diagnostic crash recovery exits nonzero without a blocking modal dialog: "+session.Capture.Summary());
+                Check(owned.All(Gone),"Unexpected overlay failure stops all owned processes in diagnostic mode");
+            }
+            using(var session=new Session(diagnostic:false)){
+                using var health=new System.Net.Http.HttpClient{Timeout=TimeSpan.FromSeconds(1)};
+                Until(()=>{try{if(!Process.GetProcessesByName("whisper-server").Any(UnderPackage))return false;using var status=JsonDocument.Parse(health.GetStringAsync("http://127.0.0.1:8178/health").GetAwaiter().GetResult());return status.RootElement.GetProperty("status").GetString()=="ok";}catch{return false;}},"Normal-mode saved model readiness",180);
+                int[] owned=OwnedPids(session);Overlay().Kill();
+                var cancel=Find(session.Process.Id,"Cancel",ControlType.Button,30);Check(owned.All(Gone),"Normal-mode crash recovery stops owned processes before showing Retry/Cancel");
+                Invoke(cancel);Check(session.Process.WaitForExit(10000)&&session.Process.ExitCode==2,"Normal user-facing failure still offers Cancel rather than pretending it was user Quit");
             }
             using(var session=new Session()){
                 session.Wait("speech-ready",180);int[] owned=OwnedPids(session);session.Process.Kill();session.Process.WaitForExit();
@@ -63,6 +81,7 @@ static class Program{
     static Process Start(string arguments){
         var start=new ProcessStartInfo(Path.Combine(package,"Rayme.exe"),arguments){UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true,WorkingDirectory=package};
         start.Environment["PATH"]=Environment.GetFolderPath(Environment.SpecialFolder.System);start.Environment["DOTNET_ROOT"]=Path.Combine(data,"not-installed");start.Environment["DOTNET_MULTILEVEL_LOOKUP"]="0";start.Environment["NODE_PATH"]="";start.Environment["RAYME_DATA_ROOT"]=data;
+        start.Environment["DOTNET_DISABLE_GUI_ERRORS"]="1"; // Capture apphost errors before managed diagnostic code can start.
         return Process.Start(start)??throw new Exception("Rayme.exe could not be launched");
     }
     static Process Overlay(){Process? found=null;Until(()=>{found=Process.GetProcessesByName("CaptionOverlay").FirstOrDefault(p=>UnderPackage(p));return found!=null;},"Owned native overlay");return found!;}
@@ -82,11 +101,20 @@ static class Program{
     static void SelectMode(int pid,string label){var combo=Find(pid,"Speech processing mode",ControlType.ComboBox);((ExpandCollapsePattern)combo.GetCurrentPattern(ExpandCollapsePattern.Pattern)).Expand();AutomationElement? item=null;Until(()=>{item=combo.FindFirst(TreeScope.Descendants,new PropertyCondition(AutomationElement.NameProperty,label));return item!=null;},"Processing option "+label);((SelectionItemPattern)item!.GetCurrentPattern(SelectionItemPattern.Pattern)).Select();}
     static void Invoke(AutomationElement button)=>((InvokePattern)button.GetCurrentPattern(InvokePattern.Pattern)).Invoke();
     sealed class Session:IDisposable{
-        public Process Process { get; }=Start("--diagnostics");
+        public Process Process=>Capture.Process;
+        public DiagnosticCapture Capture { get; }
         public ConcurrentBag<string> Events { get; }=[];
-        public Session(){_=Task.Run(async()=>{while(await Process.StandardOutput.ReadLineAsync() is {} line){try{using var doc=JsonDocument.Parse(line);Events.Add(doc.RootElement.GetProperty("type").GetString()!);}catch(JsonException){}}});_=Task.Run(async()=>{while(await Process.StandardError.ReadLineAsync()!=null){}});}
-        public void Wait(string type,int seconds=45)=>Until(()=>Events.Contains(type),type,seconds);
-        public void WaitCount(string type,int count,int seconds=45)=>Until(()=>Events.Count(e=>e==type)>=count,type+" count "+count,seconds);
-        public void Dispose(){if(!Process.HasExited){Process.Kill();Process.WaitForExit();}Process.Dispose();}
+        public Session(bool diagnostic=true){
+            Capture=new DiagnosticCapture(Start(diagnostic?"--diagnostics":""),Path.Combine(diagnostics,$"session-{++sessionNumber}.json"),Sanitize,line=>{
+                try{using var doc=JsonDocument.Parse(line);if(doc.RootElement.ValueKind==JsonValueKind.Object&&doc.RootElement.TryGetProperty("type",out var type)&&type.ValueKind==JsonValueKind.String)Events.Add(type.GetString()!);}catch(JsonException){}
+            });
+        }
+        public void Wait(string type,int seconds=45)=>WaitCount(type,1,seconds);
+        public void WaitCount(string type,int count,int seconds=45){
+            try{Until(()=>Events.Count(e=>e==type)>=count||Process.HasExited,type+" count "+count,seconds);}
+            catch(TimeoutException){Capture.TimedOut=true;Capture.Save();throw new Exception("Timed out waiting for "+type+": "+Capture.Summary());}
+            if(Process.HasExited){Capture.Flush();if(Events.Count(e=>e==type)<count){Capture.Save();throw new Exception("Launcher exited before "+type+": "+Capture.Summary());}}
+        }
+        public void Dispose()=>Capture.Dispose();
     }
 }

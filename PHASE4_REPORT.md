@@ -2,6 +2,27 @@
 
 Baseline: `1d5c96596c55d326571eac63221cc5434757b705`, fetched from the existing feature branch before work. The user reports that baseline's modern WPF overlay/Controls/tray passed Windows CI and physical synthetic-caption testing. Those results are retained as baseline evidence, not claimed for this new portable package. Work continues on `feature/windows-loopback-captions`, draft PR #1. No merge or stable release is authorized.
 
+## Launcher diagnosis and independent runtime reuse (current correction)
+
+The late `3962d5d` failure has a concrete platform mismatch: the portable job ran on Windows Server 2022 (build 20348), while Rayme's preserved launcher requirement is Windows build 22000 or newer. The rejection happened before `--diagnostics` was initialized and displayed a modal MessageBox. The acceptance test then combined a 30-second timeout and nonzero exit into one assertion without draining its redirected pipes. This explains a definite blocker; the next Windows run must still supply its actual exit/timeout/exception evidence before any additional startup cause is claimed.
+
+Application packaging/acceptance now uses `windows-2025` (build 26100). The VS2022 native compiler stays on `windows-2022`. The launcher retains the same Windows/API and x64 restrictions. Diagnostic mode initializes first, emits safe structured stage/reason/type/HResult/native-code records within a 32 KiB budget, and exits nonzero instead of opening dialogs on unsupported platforms, duplicate instances or errors. Normal user startup dialogs and Retry/Cancel remain. No raw exception messages, URLs, handoff tokens or transcripts are logged. Integrity verification still hashes every file and rejects missing, modified, extra and escaping entries.
+
+The portable driver keeps the 30-second verification bound. It separately records timeout, exit code, elapsed time and bounded stdout/stderr tails in `portable-test-diagnostics/launcher-verify.json`. It drains pipes continuously, kills timed-out probes, redacts paths/URLs/capabilities and suppresses .NET apphost GUI errors. Session probes also save bounded diagnostic records and distinguish early process exits from timeouts. Tests cover both noninteractive diagnostic crashes and normal interactive Retry/Cancel recovery.
+
+Native compilation is independent of application packaging:
+
+1. `runtime-inputs` fingerprints pinned whisper.cpp/CUDA sources, architectures and assets, native build/helper scripts, UTF-8 manifest, licenses, actual MSVC/compiler/linker/librarian/RC/MT versions, VS/SDK/CMake/Ninja/Node versions, image version and a hash of ambient compiler/include/library flags. App backend/UI/launcher/test changes are excluded.
+2. A trusted push's `whisper-runtime` job serializes producers by that exact key. It restores an exact cache or a trusted matching artifact before compiling. PRs never compile or populate the producer cache; a Linux consumer waits for the trusted push artifact and verifies its identity and every SHA256.
+3. On a cache/artifact miss, the producer performs both real builds, `--help` and UTF-8 PE-resource checks, seals all executables/DLLs/licenses/metadata with SHA256, and uploads an immutable artifact immediately. Cache saving follows. These steps do not depend on later app acceptance, so a subsequent failure cannot discard the native bundle. A cache eviction can fall back to the persisted trusted artifact. Producer lookup rejects PR/fork/unrelated-workflow artifacts, but accepts a verified runtime from a run whose later app checks failed.
+4. App packaging has no compiler fallback. It requires the exact bundle key, rechecks every SHA256 and both executables, then publishes the .NET apps, assembles the ZIP, rechecks both packaged manifests, and runs every existing extracted-ZIP, native lifecycle, real inference and security/release gate. `VERSION.json` records the runtime key and original producer commit. Reused bytes do not exempt the application from acceptance.
+
+A **first independent cache fill can still require one CUDA build**: previous failed runs did not persist the compiled binaries. No such compilation was run in this Linux correction session. App-only fixes after the first producer completes can use those exact binaries even if application acceptance failed. A legitimate native input/compiler change requires a new build. Cache/artifact storage availability and real Windows cross-run reuse remain pending CI observation; no speed measurement or new Windows PASS is claimed here.
+
+Current local evidence: 63 Node tests pass (including cache-key invalidation, SHA256 tampering/missing/extra-file rejection and trusted-artifact selection/wait policy); 19 launcher platform/integrity/bounded-output/timeout assertions pass; launcher and portable driver compile with zero warnings/errors; all four PowerShell scripts parse; both workflows pass actionlint. The actual managed launcher on Linux exits 1 immediately with structured `unsupported-platform` stderr in diagnostic mode. Windows PE execution, GUI recovery and actual cache hits remain unverified for this correction. Runtime unit fixtures are explicitly not compiled binaries or inference results.
+
+New focused files: `StartupChecks.cs`, `DiagnosticCapture.cs`, `RaymeLauncher.Tests`, `build-whisper.ps1`, `whisper-common.ps1`, `runtime-inputs.ps1`, `runtime-bundle.js`, `find-runtime.cjs`, and runtime-bundle regressions. Existing launcher/portable tests, assembler metadata, packaging script and CI orchestration were updated. Original Discord/audio/inference implementations and production pins remain intact.
+
 ## Official delivery and current verification boundary
 
 The official end-user destination is **https://github.com/fluidhelix/Rayme-live-caption/releases**, with these two custom assets:
@@ -103,7 +124,7 @@ No NVIDIA hardware is present in this Linux environment, so **real CUDA inferenc
 
 | Evidence | Result from this session |
 |---|---|
-| Linux Node regressions | 59 tests pass, including new private quit intent, exit-code-zero crash distinction, no browser launch, setup/path/download/integrity recovery, CPU/GPU mode/fallback/evidence races, package allowlist/tampering and prerelease fail-closed guards. GPU/control unit fixtures are not real GPU inference claims. |
+| Linux Node regressions | 63 tests pass, including new private quit intent, exit-code-zero crash distinction, no browser launch, setup/path/download/integrity recovery, CPU/GPU mode/fallback/evidence races, package allowlist/tampering and prerelease fail-closed guards. GPU/control unit fixtures are not real GPU inference claims. |
 | Native state/settings/placement | Existing 50 assertions pass. |
 | Actual native ClientWebSocket → production Node server | Existing nine .NET assertions and Node authentication/reconnection/cross-client checks pass. |
 | Browser controls | Existing Playwright/Chromium test passes. |
@@ -143,7 +164,12 @@ node test/native-overlay-session.js
 dotnet run --project native/LoopbackCapture.Tests -c Release
 python test/overlay-browser.py
 # Windows developer/CI build host: pinned .NET SDK, MSVC 2022 x64, CMake/Ninja and npm
-./distribution/build.ps1 -OutputDirectory artifacts/release
+# First resolve the VS2022 x64 toolchain and compile/seal the native bundle once:
+./distribution/runtime-inputs.ps1 -OutputFile artifacts/native-inputs.json
+./distribution/build-whisper.ps1 -OutputDirectory artifacts/whisper-runtime -IdentityFile artifacts/native-inputs.json
+$key = (Get-Content artifacts/native-inputs.json -Raw | ConvertFrom-Json).key
+# Package/accept on a >=22000 host. CI downloads the already sealed bundle:
+./distribution/build.ps1 -WhisperRuntimeDirectory artifacts/whisper-runtime -WhisperRuntimeKey $key -OutputDirectory artifacts/release
 # Use the exact ZIP extracted to a clean Unicode/spaced directory:
 node test/distribution/verify-package.js <extracted-Rayme-directory>
 dotnet run --project native/PortablePackage.Tests -c Release -- <extracted-Rayme-directory> <explicit-CI-model>
