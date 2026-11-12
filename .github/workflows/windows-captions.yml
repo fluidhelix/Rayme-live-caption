@@ -16,10 +16,13 @@ jobs:
     needs: [build-test, caption-overlay, speech-integration]
     runs-on: windows-latest
     timeout-minutes: 75
-    env:
-      NUGET_PACKAGES: ${{ runner.temp }}/rayme-nuget
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Use a temporary NuGet package directory
+        shell: pwsh
+        run: |
+          $packages = Join-Path $env:RUNNER_TEMP 'rayme-nuget'
+          "NUGET_PACKAGES=$packages" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22.23.5'

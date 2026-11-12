@@ -1,0 +1,4 @@
+self-hosted-runner:
+  labels:
+    # Optional real NVIDIA acceptance runner; not a GitHub-hosted label.
+    - rayme-cuda
