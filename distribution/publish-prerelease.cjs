@@ -4,7 +4,7 @@ const path=require('node:path');
 const crypto=require('node:crypto');
 const assert=require('node:assert/strict');
 module.exports=async function publish({github,context,directory,gpuVerified=false}){
-  assert.equal(context.ref,'refs/heads/feature/windows-loopback-captions','Only the authorized feature branch can publish prereleases');
+  assert.equal(context.ref,'refs/heads/main','Only the authorized main branch can publish prereleases');
   assert.ok(['push','workflow_dispatch'].includes(context.eventName));
   assert.match(context.sha,/^[a-f0-9]{40}$/);
   const version=require('./assets.json').version,name=`Rayme-Smart-Live-Captions-v${version}-win-x64.zip`;

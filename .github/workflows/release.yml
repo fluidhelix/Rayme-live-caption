@@ -9,7 +9,7 @@ permissions:
   contents: write
 jobs:
   publish:
-    if: github.ref == 'refs/heads/feature/windows-loopback-captions' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262

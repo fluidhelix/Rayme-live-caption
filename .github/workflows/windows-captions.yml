@@ -1,7 +1,7 @@
 name: Windows caption helper
 on:
   push:
-    branches: ['feature/**', main]
+    branches: [main]
   pull_request:
   workflow_dispatch:
     inputs:
@@ -265,7 +265,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Real CUDA evidence or transcription accuracy failed' }
   publish-prerelease:
     needs: [portable, cuda-hardware]
-    if: always() && needs.portable.result == 'success' && (needs.cuda-hardware.result == 'success' || needs.cuda-hardware.result == 'skipped') && github.ref == 'refs/heads/feature/windows-loopback-captions' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: always() && needs.portable.result == 'success' && (needs.cuda-hardware.result == 'success' || needs.cuda-hardware.result == 'skipped') && github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     permissions:
       contents: write
     uses: ./.github/workflows/release.yml

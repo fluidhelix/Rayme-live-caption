@@ -36,3 +36,10 @@ test('a PR waits for the trusted push artifact and never substitutes a compilati
  const f=lookupFixture();let waited=0;assert.equal(await findRuntime({...f,attempts:2,wait:async()=>{waited++;f.add(10,{});}}),10);assert.equal(waited,1);
  const missing=lookupFixture();await assert.rejects(findRuntime({...missing,attempts:1}),/no PR compilation fallback/);
 });
+
+test('native runtime reuse accepts verified main producers and historical feature builds only',async()=>{
+ const f=lookupFixture();f.add(1,{head_branch:'fix/untrusted'});f.add(2,{head_branch:'main'});
+ assert.equal(await findRuntime({...f,attempts:1}),2);
+ const historical=lookupFixture();historical.add(3,{});
+ assert.equal(await findRuntime({...historical,attempts:1}),3);
+});
