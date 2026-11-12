@@ -44,7 +44,10 @@ async function speechE2E(runtime, output) {
     await new Promise((resolve,reject)=>{ws.once('open',resolve);ws.once('error',reject);});
     const source=Object.freeze({id:'licensed-speech',generation:1,name:'Public-domain speech fixture',identity:'sha256:'+require('./assets.json').fixtureSha256});
     const failures=[], jobs=[];
-    scheduler=new SourceScheduler((audio,signal)=>whisper.infer(audio,signal),e=>ui.publish(e),(_s,state,message)=>{if(state==='unavailable'||message.includes('skipped'))failures.push(message);});scheduler.attach(source);
+    // This is an offline CPU speech/accuracy integration test, not a real-time latency test.
+    // Allow slow hosted runners to finish real inference; deterministic lifecycle tests
+    // independently enforce the 15-second production caption freshness policy.
+    scheduler=new SourceScheduler((audio,signal)=>whisper.infer(audio,signal),e=>ui.publish(e),(_s,state,message)=>{if(state==='unavailable'||message.includes('skipped'))failures.push(message);},Date.now,{maxAgeMs:120000});scheduler.attach(source);
     const segmenter=new Segmenter();segmenter.on('segment',job=>{jobs.push({id:job.id,final:job.final});scheduler.add(source,{...job,capturedAt:job.captureOffsetMs});});
     // Feed frames in batches, exercising real partial/final queue coalescing without realtime sleep.
     for(let i=0;i<pcm.length;i+=640)segmenter.push(pcm.subarray(i,i+640));
