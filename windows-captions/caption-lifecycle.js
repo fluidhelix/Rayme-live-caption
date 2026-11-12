@@ -23,7 +23,7 @@ function sourceHealth(previous,event){
   let current;
   if(capture?.state==='stopped')current=capture;
   else if(issues.length){current=Object.values(components).find(c=>c.state==='unavailable')||inference||capture;current={...current,state:Object.values(components).some(c=>c.state==='unavailable')?'unavailable':'recovering'};}
-  else current=[capture,inference].find(c=>c?.state==='recovering')||(inference?.notice?{...inference,state:'delayed'}:null)||[inference].find(c=>['delayed','transcribing'].includes(c?.state))||[capture,inference].find(c=>c?.state==='waiting')||capture||inference;
+  else current=[capture,inference].find(c=>c?.state==='recovering')||(inference?.notice?{...inference,state:'delayed'}:null)||[inference].find(c=>['delayed','transcribing'].includes(c?.state))||(capture?.state==='capturing'?capture:null)||[capture,inference].find(c=>c?.state==='waiting')||capture||inference;
   const message=[current?.message,...issues.filter(issue=>issue!==current?.message).map(issue=>'Last failure: '+issue),inference?.notice!==current?.message?inference?.notice:''].filter(Boolean).join(' ');
   return{...event,components,state:current?.state||'waiting',message};
 }
