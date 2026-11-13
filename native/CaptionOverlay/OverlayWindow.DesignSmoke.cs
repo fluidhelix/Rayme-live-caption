@@ -130,6 +130,10 @@ internal sealed partial class OverlayWindow {
         await Bottom();panel.Text.Focus();before=panel.Text.VerticalOffset;RoutedKey(panel,Key.PageUp);
         await Wait(()=>!panel.ScrollWorkPending&&!panel.Following&&panel.Text.VerticalOffset<before-1,"routed keyboard PageUp");
         Check(!panel.Following,"Native routed keyboard navigation leaves live-follow mode");
+        RoutedKey(panel,Key.End);await Wait(()=>!panel.ScrollWorkPending&&panel.Following&&panel.LatestVisible(),"routed keyboard End resumes follow");
+        RoutedKey(panel,Key.Home);await Wait(()=>!panel.ScrollWorkPending&&!panel.Following&&panel.Text.VerticalOffset<1,"routed keyboard Home reaches retained beginning");
+        before=panel.Text.VerticalOffset;RoutedKey(panel,Key.PageDown);await Wait(()=>!panel.ScrollWorkPending&&panel.Text.VerticalOffset>before+1,"routed keyboard PageDown moves through retained history");
+        Check(panel.Text.IsReadOnly&&!panel.Text.IsReadOnlyCaretVisible,"Keyboard viewport navigation preserves the approved read-only hidden-caret presentation");
         await Bottom();Caption(13,"Queued restoration "+Words(55),false);Paint();Check(panel.ScrollWorkPending,"Race fixture starts with actual queued restoration");
         var stableRun=panel.Text.Document.Blocks.OfType<Paragraph>().Single().Inlines.OfType<Run>().First();var position=stableRun.ContentStart.GetPositionAtOffset(18)!;panel.Text.Selection.Select(position,position);
         EditingCommands.SelectToDocumentStart.Execute(null,panel.Text);string raceSelection=panel.Text.Selection.Text;

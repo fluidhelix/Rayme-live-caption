@@ -48,6 +48,12 @@ internal sealed class TranscriptPanel : Border {
         ScrollBar.LineUpCommand,ScrollBar.LineDownCommand,ScrollBar.PageUpCommand,ScrollBar.PageDownCommand,
         ScrollBar.ScrollToTopCommand,ScrollBar.ScrollToBottomCommand,ScrollBar.ScrollToHomeCommand,ScrollBar.ScrollToEndCommand,
         ScrollBar.ScrollToVerticalOffsetCommand,ScrollBar.DeferScrollToVerticalOffsetCommand];
+    static RoutedCommand? ViewportKey(Key key,ModifierKeys modifiers){
+        if(modifiers!=ModifierKeys.None&&!(modifiers==ModifierKeys.Control&&key is Key.Home or Key.End))return null;
+        return key switch{Key.Up=>ScrollBar.LineUpCommand,Key.Down=>ScrollBar.LineDownCommand,
+            Key.PageUp=>ScrollBar.PageUpCommand,Key.PageDown=>ScrollBar.PageDownCommand,
+            Key.Home=>ScrollBar.ScrollToTopCommand,Key.End=>ScrollBar.ScrollToBottomCommand,_=>null};
+    }
     internal string Slot {get;}
     internal bool IsLive=>live.Visibility==Visibility.Visible&&live.Text=="LIVE";
     internal string SourceLabel=>label.Text;
@@ -75,6 +81,11 @@ internal sealed class TranscriptPanel : Border {
             bool selectAll=e.Key==Key.A&&(Keyboard.Modifiers&ModifierKeys.Control)!=0;
             if(selectAll||e.Key is Key.Left or Key.Right or Key.Up or Key.Down or Key.PageUp or Key.PageDown or Key.Home or Key.End or Key.Space)
                 ReaderNavigating(selectAll||(Keyboard.Modifiers&ModifierKeys.Shift)!=0,"key:"+e.Key);
+            // WPF disables caret-navigation commands when a read-only caret is
+            // hidden. Route plain viewport keys to its ScrollViewer instead;
+            // Shift-selection and other editor commands keep their native path.
+            var scrolling=Text.IsReadOnly&&!Text.IsReadOnlyCaretVisible?ViewportKey(e.Key,Keyboard.Modifiers):null;
+            if(!e.Handled&&scrolling!=null&&scrolling.CanExecute(null,Scroll)){scrolling.Execute(null,Scroll);e.Handled=true;}
         }),true);
         // SelectAll from the context menu and the editor's Shift/Ctrl+Shift
         // bindings use routed commands, including commands invoked by assistive UI.
