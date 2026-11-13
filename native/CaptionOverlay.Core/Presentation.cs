@@ -38,9 +38,15 @@ public static class TranscriptPresentation {
         state.Partials.TryGetValue(slot,out var partial);
         string live=partial?.Text.Trim()??"";
         string title=state.Sources.GetValueOrDefault(slot)?.Source.Name??state.History.LastOrDefault(c=>c.Source.Id==slot)?.Source.Name??(slot=="device"?"Windows playback":"Choose Application "+slot.ToUpperInvariant());
-        return new(text,live,slot=="device"?title:$"Application {slot.ToUpperInvariant()} · {title}",live.Length>0);
+        return new(text,live,title,live.Length>0);
     }
-    public static string[] Slots(CaptionState state)=>state.Sources.ContainsKey("device")||!state.Sources.ContainsKey("a")&&!state.Sources.ContainsKey("b")&&!state.History.Any(c=>c.Source.Id is "a" or "b")?["device"]:["a","b"];
+    public static string[] Slots(CaptionState state)=>state.Sources.ContainsKey("device")?["device"]:new[]{"a","b"}.Where(state.Sources.ContainsKey).ToArray();
+    public static TranscriptSegment[] Segments(CaptionState state,string slot){
+        var list=state.History.Where(c=>c.Source.Id==slot).OrderBy(c=>c.CapturedAt).Select(c=>new TranscriptSegment(CaptionPresentation.RowKey(c),Finish(c.Text),true)).ToList();
+        if(state.Partials.TryGetValue(slot,out var p)&&p.Text.Trim().Length>0)list.Add(new(CaptionPresentation.RowKey(p),p.Text.Trim(),false));
+        return list.ToArray();
+    }
+
 }
 public sealed class ScrollFollow {
     public bool Following { get; private set; }=true;
@@ -51,4 +57,29 @@ public static class WindowInteraction {
     public static string LockGlyph(bool locked)=>locked?"\uE72E":"\uE785";
     public static string LockAction(bool locked)=>locked?"Unlock overlay position":"Lock overlay position";
     public static string LockHint(bool locked)=>locked?"Position and size locked — unlock position":"Position and size unlocked — lock position";
+}
+
+public record TranscriptSegment(string Key,string Text,bool Final);
+public sealed class CaptionLayout {
+    public bool Detached {get;private set;}
+    public static bool CanDetach(CaptionState state)=>TranscriptPresentation.Slots(state).SequenceEqual(new[]{"a","b"});
+    public bool Detach(CaptionState state){if(!CanDetach(state))return false;Detached=true;return true;}
+    public void Reattach()=>Detached=false;
+    public void Synchronize(CaptionState state){if(!CanDetach(state))Detached=false;}
+}
+public static class TextPosition {
+    // Preserve positions in unchanged prefixes/suffixes; corrected words map to
+    // the nearest surviving boundary. No obsolete text is retained to hold layout.
+    public static int Map(string oldText,string newText,int offset){
+        offset=Math.Clamp(offset,0,oldText.Length);int prefix=0,suffix=0;
+        while(prefix<Math.Min(oldText.Length,newText.Length)&&oldText[prefix]==newText[prefix])prefix++;
+        while(suffix<Math.Min(oldText.Length,newText.Length)-prefix&&oldText[^(suffix+1)]==newText[^(suffix+1)])suffix++;
+        if(offset<=prefix)return Math.Min(offset,newText.Length);
+        if(offset>=oldText.Length-suffix)return Math.Clamp(newText.Length-(oldText.Length-offset),0,newText.Length);
+        return offset-prefix<=oldText.Length-suffix-offset?prefix:newText.Length-suffix;
+    }
+    public static bool IsAppend(IReadOnlyList<TranscriptSegment> before,IReadOnlyList<TranscriptSegment> after){
+        var previous=before.ToDictionary(x=>x.Key);
+        return after.Any(x=>!previous.TryGetValue(x.Key,out var old)||!x.Final&&!old.Final&&x.Text.Length>old.Text.Length&&x.Text.StartsWith(old.Text,StringComparison.Ordinal));
+    }
 }

@@ -21,9 +21,13 @@ internal sealed partial class OverlayWindow : Window {
     readonly CaptionState state = new();
     readonly string settingsFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Rayme", "CaptionOverlay", "settings.json");
     Preferences prefs;
-    readonly Border surface = new() { CornerRadius = new CornerRadius(16), BorderThickness = new Thickness(1), BorderBrush = Brush("#47566C"), Padding = new Thickness(16,8,16,12) };
+    readonly Border surface = new() { CornerRadius = new CornerRadius(16), BorderThickness = new Thickness(1), BorderBrush = Brush("#515151"), Padding = new Thickness(0) };
     readonly Grid captions = new();
-    readonly TextBlock connection = new() { FontSize = 12, Foreground = Brush("#A8E5D0"), Margin = new Thickness(0,2,0,4), TextWrapping = TextWrapping.Wrap };
+    readonly CaptionToolbar toolbar;
+    readonly CaptionLayout layout=new();
+    readonly Dictionary<string,DetachedCaptionWindow> detached=[];
+    bool groupHidden;
+    Window? controlOwner;
     readonly Dictionary<string, TranscriptPanel> panels = [];
     string panelLayout="";
     readonly Button lockButton;
@@ -40,7 +44,7 @@ internal sealed partial class OverlayWindow : Window {
     string connectionText = "Connecting…";
     IntPtr handle;
     internal string ExitCapability="";
-    bool quitRequested, backendClosed;
+    bool quitRequested, backendClosed,sessionStarted;
     internal void BackendClosed(){backendClosed=true;Close();}
     void QuitRayme(){
         if(quitRequested)return;quitRequested=true;
@@ -58,21 +62,14 @@ internal sealed partial class OverlayWindow : Window {
         Background = Brushes.Transparent; Foreground = Brushes.White; FontFamily = new FontFamily("Segoe UI Variable Text, Segoe UI");
         ShowInTaskbar = true; ShowActivated = false; Topmost = prefs.Topmost;
         WindowChrome.SetWindowChrome(this, new WindowChrome { CaptionHeight = 0, ResizeBorderThickness = new Thickness(7), CornerRadius = new CornerRadius(14), GlassFrameThickness = new Thickness(0), UseAeroCaptionButtons = false });
-        var grid = new Grid(); grid.RowDefinitions.Add(new() { Height = GridLength.Auto }); grid.RowDefinitions.Add(new() { Height = GridLength.Auto }); grid.RowDefinitions.Add(new());
-        var header = new DockPanel { LastChildFill = true };
-        var hide = Theme.IconButton("\uE738", "Hide overlay", (_,_) => { if (tray?.Available == true) Hide(); }); hide.ToolTip = "Hide to notification area; use the Rayme tray icon to restore"; DockPanel.SetDock(hide,Dock.Right); header.Children.Add(hide);
-        settingsButton = Theme.IconButton("\uE713", "Open Controls", (_,_) => OpenControls()); DockPanel.SetDock(settingsButton,Dock.Right); header.Children.Add(settingsButton);
-        lockButton = Theme.IconButton("\uE72E", "Lock overlay position", (_,_) => Change(prefs with { Locked = !prefs.Locked })); DockPanel.SetDock(lockButton,Dock.Right); header.Children.Add(lockButton);
-        // Header controls always belong to WPF client hit testing, including after
-        // WindowChrome rebuilds its non-client region on a ResizeMode change.
-        WindowChrome.SetIsHitTestVisibleInChrome(header,true);
-        var drag = new StackPanel { Orientation=Orientation.Horizontal, VerticalAlignment=VerticalAlignment.Center, Cursor=Cursors.SizeAll, ToolTip="Drag to any monitor (unlock first)", Margin=new Thickness(0,4,0,4) };
-        drag.Children.Add(Theme.Mark(22)); var wordmark=Theme.Text("Rayme",13,"#E0E7F2",true); wordmark.Margin=new Thickness(8,0,0,0); wordmark.VerticalAlignment=VerticalAlignment.Center; drag.Children.Add(wordmark);
-        drag.MouseLeftButtonDown += (_,e) => { if (!prefs.Locked && !clickThrough && e.ButtonState == MouseButtonState.Pressed) { try { DragMove(); } catch (InvalidOperationException) { } } }; header.Children.Add(drag);
-        grid.Children.Add(header); Grid.SetRow(connection,1); grid.Children.Add(connection);
-        Grid.SetRow(captions,2); grid.Children.Add(captions); surface.Child = grid; Content = surface;
+        toolbar=new CaptionToolbar(HideGroup,()=>{if(layout.Detached)Reattach();else Detach();},()=>Change(prefs with{Locked=!prefs.Locked}),()=>OpenSourceControls(this));
+        lockButton=toolbar.Lock;settingsButton=toolbar.Settings;
+        var grid=new Grid();grid.RowDefinitions.Add(new(){Height=new GridLength(36)});grid.RowDefinitions.Add(new());
+        grid.Children.Add(new Border{BorderBrush=Theme.Brush("#262626"),BorderThickness=new(0,0,0,1),Child=toolbar});
+        Grid.SetRow(captions,1);grid.Children.Add(captions);surface.Child=grid;Content=surface;
+        WindowDrag.Install(this,()=>prefs.Locked||clickThrough);
         saveTimer.Tick += (_,_) => { saveTimer.Stop(); Save(); };
-        displayTimer.Tick += (_,_) => { displayTimer.Stop(); Recover(false); };
+        displayTimer.Tick += (_,_) => { displayTimer.Stop(); Recover(false);foreach(var view in detached.Values)view.Recover(false); };
         SourceInitialized += (_,_) => {
             handle = new WindowInteropHelper(this).Handle;
             HwndSource.FromHwnd(handle)?.AddHook(WindowMessage);
@@ -80,6 +77,7 @@ internal sealed partial class OverlayWindow : Window {
         };
         LocationChanged += (_,_) => ScheduleSave(); SizeChanged += (_,_) => ScheduleSave();
         Loaded += async (_,_) => {
+            if(sessionStarted)return;sessionStarted=true;
 #if !RAYME_DISTRIBUTION
             if (smoke) { await SmokeAsync(); return; }
 #endif
@@ -89,7 +87,7 @@ internal sealed partial class OverlayWindow : Window {
         };
         Closing += (_,e) => { if(!smoke&&!backendClosed){e.Cancel=true;QuitRayme();return;} closing = true; saveTimer.Stop(); displayTimer.Stop(); if (!smoke) Save(); };
         Closed += async (_,_) => {
-            controls?.Close(); tray?.Dispose(); if (client != null) await client.DisposeAsync();
+            foreach(var view in detached.Values)view.CloseView();detached.Clear();controls?.Close(); tray?.Dispose(); if (client != null) await client.DisposeAsync();
         };
     }
     IntPtr WindowMessage(IntPtr hwnd, int message, IntPtr wParam, IntPtr lParam, ref bool handled) {
@@ -99,6 +97,7 @@ internal sealed partial class OverlayWindow : Window {
     void ScheduleSave() { if (restoring || closing || handle == IntPtr.Zero || smoke) return; saveTimer.Stop(); saveTimer.Start(); }
     void Save() {
         if (handle != IntPtr.Zero && WindowState == WindowState.Normal) prefs = prefs with { Placement = DesktopPlacement.Read(handle), Monitor = DesktopPlacement.MonitorId(handle) };
+        foreach(var view in detached.Values)prefs=prefs.WithSource(view.Slot,view.Placement());
         if (!prefs.Save(settingsFile)) { connectionText = "Settings could not be saved; check local folder access."; UpdateConnection(); }
     }
     void Recover(bool reset) {
@@ -114,61 +113,78 @@ internal sealed partial class OverlayWindow : Window {
     }
     void Change(Preferences next) { prefs = next.Validate(); ApplyAppearance(); Render(); UpdateSettings(); ScheduleSave(); }
     void ApplyAppearance() {
-        surface.Background = new SolidColorBrush(Color.FromArgb((byte)(prefs.BackgroundOpacity * 255), 15, 23, 38));
+        surface.Background = new SolidColorBrush(Color.FromArgb((byte)(prefs.BackgroundOpacity * 255), 0, 0, 0));
         Topmost = prefs.Topmost; ResizeMode = prefs.Locked ? ResizeMode.NoResize : ResizeMode.CanResizeWithGrip;
         WindowChrome.GetWindowChrome(this).ResizeBorderThickness=new Thickness(prefs.Locked?0:7);
         lockButton.Content = WindowInteraction.LockGlyph(prefs.Locked);
         Theme.Accessible(lockButton,WindowInteraction.LockAction(prefs.Locked));
         lockButton.ToolTip = WindowInteraction.LockHint(prefs.Locked);
+        foreach(var view in detached.Values)UpdateDetachedAppearance(view);
     }
     void Through(bool enabled) {
         // Only enable once a live tray recovery surface exists; never persist this mode.
         if (enabled && tray?.Available != true) return;
-        clickThrough = enabled; DesktopPlacement.ClickThrough(handle, enabled); UpdateConnection(); UpdateSettings();
+        clickThrough = enabled; DesktopPlacement.ClickThrough(handle, enabled);foreach(var view in detached.Values)UpdateDetachedAppearance(view); UpdateConnection(); UpdateSettings();
     }
     void Reveal(bool settings = false) {
-        Through(false); if (!IsVisible) Show(); if (WindowState != WindowState.Normal) WindowState = WindowState.Normal;
-        Recover(false); Activate(); if (settings) OpenControls();
+        groupHidden=false;Through(false);
+        if(layout.Detached){foreach(var view in detached.Values){view.Show();if(view.WindowState!=WindowState.Normal)view.WindowState=WindowState.Normal;view.Recover(false);}detached.Values.First().Activate();}
+        else{if(!IsVisible)Show();if(WindowState!=WindowState.Normal)WindowState=WindowState.Normal;Recover(false);Activate();}
+        if(settings)OpenSourceControls(layout.Detached?detached.Values.First():this);
     }
     void CreateTray() {
         try { tray = new TrayIcon(this,BuildTrayActions); }
         catch { tray?.Dispose(); tray=null; connectionText="Tray unavailable; keep this window visible. Click-through disabled."; }
     }
-    TrayAction[] BuildTrayActions() => [
-        new("Show overlay", "\uE8A7", () => Reveal()),
-        new("Open Controls", "\uE713", () => Reveal(true)),
-        new(prefs.Locked ? "Unlock position" : "Lock position", WindowInteraction.LockGlyph(prefs.Locked), () => Change(prefs with { Locked=!prefs.Locked })),
-        new("Disable click-through", "\uE8B0", () => { Through(false); Reveal(); }),
-        new("Restore to primary monitor", "\uE9E9", () => { Change(prefs with { Locked=false }); Reveal(); Recover(true); }),
-        new("Quit Rayme", "\uE8BB", QuitRayme)
-    ];
+    TrayAction[] BuildTrayActions(){
+        var actions=new List<TrayAction>{
+            new("Show overlay","\uE8A7",()=>Reveal()),new("Open Controls","\uE713",()=>Reveal(true)),
+            new(layout.Detached?"Unlock both windows":prefs.Locked?"Unlock position":"Lock position",WindowInteraction.LockGlyph(layout.Detached?prefs.DetachedA.Locked&&prefs.DetachedB.Locked:prefs.Locked),()=>{if(layout.Detached){Change(prefs with{DetachedA=prefs.DetachedA with{Locked=false},DetachedB=prefs.DetachedB with{Locked=false}});}else Change(prefs with{Locked=!prefs.Locked});}),
+            new("Disable click-through","\uE8B0",()=>{Through(false);Reveal();}),
+            new("Restore to primary monitor","\uE9E9",()=>RestoreAll()),
+        };
+        if(layout.Detached)actions.Add(new("Reattach captions","\uE737",()=>Reattach()));
+        actions.Add(new("Quit Rayme","\uE8BB",QuitRayme));return actions.ToArray();
+    }
     async Task RunClient() {
         try { await client!.RunAsync(json => Dispatcher.InvokeAsync(() => { state.Apply(json);HandleSetup(json);HandleProcessing(json);Render();UpdateSettings(); }).Task,
             status => Dispatcher.InvokeAsync(() => { if(!quitRequested){connectionText = status;UpdateConnection();} }).Task); }
         catch { if (!closing) { connectionText = "Caption connection failed. Restart Windows caption mode."; UpdateConnection(); } }
     }
     void UpdateConnection() {
-        string health=connectionText=="Connected"?string.Join(" · ",state.Sources.Values.Select(s=>$"{s.Source.Id.ToUpperInvariant()}: {s.Label}"+((s.HasFailure||s.State is "recovering" or "delayed")?$" — {s.Message}":""))):"";
-        connection.Text = "●  " + connectionText + (health.Length>0?" · "+health:"") + (state.Paused ? " · Capture paused" : "") + (clickThrough ? " · Click-through: use tray to recover" : "");
+        string Detail(IEnumerable<string> slots)=>string.Join(" · ",slots.Where(state.Sources.ContainsKey).Select(slot=>{var s=state.Sources[slot];return $"{s.Source.Name}: {s.Label} — {s.Message}";}));
+        string Short(IEnumerable<string> slots)=>connectionText!="Connected"?connectionText:string.Join(" · ",slots.Where(state.Sources.ContainsKey).Select(slot=>{var s=state.Sources[slot];return $"{s.Source.Name}: {s.Label}";}));
+        var slots=TranscriptPresentation.Slots(state);
         bool error=state.Sources.Values.Any(s=>s.HasFailure)||connectionText.Contains("lost",StringComparison.OrdinalIgnoreCase)||connectionText.Contains("failed",StringComparison.OrdinalIgnoreCase)||connectionText.Contains("not sent",StringComparison.OrdinalIgnoreCase);
-        connection.Foreground=Theme.Brush(error?"#FFD0D5":state.Paused||connectionText.StartsWith("Connecting",StringComparison.Ordinal)?"#FBE0A7":"#BBE6D8");
+        string status=Short(slots);if(status.Length==0)status=state.Paused?"Capture paused":"Ready — choose an audio source";
+        if(state.Paused)status="Paused · "+status;
+        if(clickThrough)status="Click-through · "+status;
+        toolbar.Update(status,connectionText+" · "+Detail(slots),prefs.Locked,false,CaptionLayout.CanDetach(state),error,state.Paused);
+        foreach(var view in detached.Values){view.Title="Rayme · "+state.Sources.GetValueOrDefault(view.Slot)?.Source.Name;view.Toolbar.Update((state.Paused?"Paused · ":"")+Short(new[]{view.Slot}),connectionText+" · "+Detail(new[]{view.Slot}),SourcePlacement(view.Slot).Locked,true,true,error,state.Paused);}
         if(backendStatus!=null){
             string message=setupRequired&&setupState is {} setup?setup.GetProperty("message").GetString()??"Complete speech setup.":connectionText=="Connected"?state.Status:connectionText;backendStatus.Text=message;
             bool noticeError=error||message.Contains("failed",StringComparison.OrdinalIgnoreCase)||message.Contains("could not",StringComparison.OrdinalIgnoreCase)||message.Contains("unavailable",StringComparison.OrdinalIgnoreCase);
-            statusCard!.Background=Theme.Brush(noticeError?"#3A2431":"#1B2D3D");
+            statusCard!.Background=Theme.Brush(noticeError?"#242424":"#202020");
         }
     }
     void Render() {
         UpdateConnection();
-        var slots=TranscriptPresentation.Slots(state);string layout=string.Join(",",slots);
-        if(panelLayout!=layout){
-            captions.Children.Clear();captions.RowDefinitions.Clear();panelLayout=layout;
+        if(layout.Detached&&!CaptionLayout.CanDetach(state))Reattach(!groupHidden&&!quitRequested);
+        var slots=TranscriptPresentation.Slots(state);string signature=string.Join(",",slots)+(layout.Detached?":detached":"");
+        if(panelLayout!=signature){
+            foreach(var panel in panels.Values)panel.PrepareMove();
+            captions.Children.Clear();captions.RowDefinitions.Clear();foreach(var view in detached.Values)view.Body.Children.Clear();panelLayout=signature;
+            if(slots.Length==0){captions.Children.Add(new TextBlock{Text=setupRequired?"Complete speech setup in Controls.":"Choose an audio source in Controls.",Margin=new(18),Foreground=Theme.Brush("#C0C0C0"),TextWrapping=TextWrapping.Wrap});}
             for(int i=0;i<slots.Length;i++){
-                string slot=slots[i];if(!panels.TryGetValue(slot,out var panel))panels[slot]=panel=new TranscriptPanel(slot);
-                captions.RowDefinitions.Add(new(){Height=new GridLength(1,GridUnitType.Star)});Grid.SetRow(panel,i);captions.Children.Add(panel);
+                string slot=slots[i];if(!panels.TryGetValue(slot,out var panel))panels[slot]=panel=new TranscriptPanel(slot,smoke);
+                panel.BorderThickness=new(0,!layout.Detached&&i>0?1:0,0,0);panel.BorderBrush=Theme.Brush("#292929");
+                if(layout.Detached)detached[slot].Body.Children.Add(panel);
+                else{captions.RowDefinitions.Add(new(){Height=new GridLength(1,GridUnitType.Star)});Grid.SetRow(panel,i);captions.Children.Add(panel);}
             }
         }
-        foreach(string slot in slots){string color=slot=="a"?prefs.ColorA:slot=="b"?prefs.ColorB:prefs.ColorDevice;panels[slot].Update(TranscriptPresentation.Build(state,slot),prefs.FontSize,color,setupRequired);}
+        foreach(string slot in panels.Keys.Except(slots).ToArray())panels[slot].Update(state,prefs.FontSize,slot=="a"?prefs.ColorA:slot=="b"?prefs.ColorB:prefs.ColorDevice,setupRequired);
+        foreach(string slot in slots){string color=slot=="a"?prefs.ColorA:slot=="b"?prefs.ColorB:prefs.ColorDevice;panels[slot].Interactions(layout.Detached?SourcePlacement(slot).Locked:prefs.Locked);panels[slot].Update(state,prefs.FontSize,color,setupRequired);}
+        UpdateConnection();
     }
     async Task Send(object command) {
 #if !RAYME_DISTRIBUTION
@@ -194,53 +210,15 @@ internal sealed partial class OverlayWindow : Window {
             pauseButton!.Content = state.Paused ? "Resume capture" : "Pause capture";
             Theme.Accessible(pauseButton,state.Paused?"Resume capture":"Pause capture");
             sourceStatus!.Text = string.Join("\n",state.Sources.Values.Select(s => $"{s.Source.Id.ToUpperInvariant()} · {s.Source.Name}: {s.Label} — {s.Message}"+(state.AudioLevels.TryGetValue(s.Source.Id,out var level)?$"\nSignal: {level.Dbfs:0} dBFS · "+(level.Rms==0?"silence":level.Low?"very quiet — increase application playback volume if speech is missing":"audio detected"):"" )));
-            if (lockSetting != null) lockSetting.IsChecked = prefs.Locked;
+            if (lockSetting != null){lockSetting.IsChecked = prefs.Locked;lockSetting.Visibility=layout.Detached?Visibility.Collapsed:Visibility.Visible;}
+            foreach(var (slot,check) in sourceLocks){check.Visibility=layout.Detached?Visibility.Visible:Visibility.Collapsed;check.IsChecked=SourcePlacement(slot).Locked;}
+            foreach(var(slot,title)in colorTitles)title.Text=state.Sources.GetValueOrDefault(slot)?.Source.Name??(slot=="device"?"Windows playback":"Source "+slot.ToUpperInvariant());
+            foreach(var(slot,button)in customColorButtons){string color=slot=="a"?prefs.ColorA:slot=="b"?prefs.ColorB:prefs.ColorDevice;button.Content="Custom color… "+color;}
             if (topSetting != null) topSetting.IsChecked = prefs.Topmost;
             if (throughSetting != null) throughSetting.IsChecked = clickThrough;
             if(fontControl!=null)fontControl.Value=prefs.FontSize;
             if(opacityControl!=null)opacityControl.Value=prefs.BackgroundOpacity;
             foreach(var (slot,swatches) in colorControls)foreach(var swatch in swatches)swatch.IsChecked=(string)swatch.Tag==(slot=="a"?prefs.ColorA:slot=="b"?prefs.ColorB:prefs.ColorDevice);
         } finally { syncing = false; }
-    }
-    sealed class TranscriptPanel : Border {
-        readonly TextBlock label=Theme.Text("",13,strong:true);
-        internal readonly TextBlock Text=new(){TextWrapping=TextWrapping.Wrap,Foreground=Brush("#F8FAFC"),FontStyle=FontStyles.Normal,FontWeight=FontWeights.Normal,Margin=new Thickness(0,6,6,0)};
-        readonly System.Windows.Documents.Run finalRun=new(),partialRun=new();
-        readonly TextBlock live=Theme.Text("LIVE",10,"#BBE6FF",true);
-        internal readonly ScrollViewer Scroll=new(){VerticalScrollBarVisibility=ScrollBarVisibility.Auto,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,Focusable=true};
-        readonly ScrollFollow follow=new();
-        string accent="";
-        bool scrollPending;
-        long scrollRevision;
-        double savedOffset;
-        internal bool IsLive=>live.Visibility==Visibility.Visible;
-        internal string SourceLabel=>label.Text;
-        internal string FinalText=>finalRun.Text;
-        internal string PartialText=>partialRun.Text;
-        public TranscriptPanel(string slot){
-            BorderThickness=new Thickness(3,0,0,0);Padding=new Thickness(10,3,0,3);Margin=new Thickness(0,3,0,3);
-            var grid=new Grid();grid.RowDefinitions.Add(new(){Height=GridLength.Auto});grid.RowDefinitions.Add(new());
-            var header=new DockPanel();live.Width=40;live.VerticalAlignment=VerticalAlignment.Center;DockPanel.SetDock(live,Dock.Right);header.Children.Add(live);
-            label.TextTrimming=TextTrimming.CharacterEllipsis;label.TextWrapping=TextWrapping.NoWrap;header.Children.Add(label);grid.Children.Add(header);
-            Text.Inlines.Add(finalRun);Text.Inlines.Add(partialRun);Scroll.Content=Text;Scroll.SetResourceReference(Control.FocusVisualStyleProperty,"KeyboardFocus");Theme.Accessible(Scroll,slot=="device"?"Playback transcript":"Application "+slot.ToUpperInvariant()+" transcript");
-            Scroll.ScrollChanged+=(_,e)=>{if(e.ExtentHeightChange==0&&e.ViewportHeightChange==0)follow.ReaderMoved(Scroll.VerticalOffset,Scroll.ScrollableHeight);};
-            Grid.SetRow(Scroll,1);grid.Children.Add(Scroll);Child=grid;
-        }
-        public void Update(Transcript transcript,double size,string color,bool setup){
-            label.Text=transcript.Label;label.ToolTip=transcript.Label;live.Visibility=transcript.Live?Visibility.Visible:Visibility.Hidden;
-            string final=transcript.FinalText,partial=transcript.PartialText;
-            if(final.Length==0&&partial.Length==0)final=setup?"Complete speech setup to begin.":"Listening for conversation…";
-            string tail=partial.Length>0?(transcript.FinalText.Length>0?" ":"")+partial:"";
-            bool changed=finalRun.Text!=final||partialRun.Text!=tail||Text.FontSize!=size;
-            if(finalRun.Text!=final)finalRun.Text=final;if(partialRun.Text!=tail)partialRun.Text=tail;
-            Text.FontSize=size;Text.LineHeight=size*1.4;if(accent!=color){BorderBrush=Theme.Brush(color);accent=color;}
-            if(changed){
-                scrollRevision=follow.Revision;savedOffset=Scroll.VerticalOffset;
-                if(!scrollPending){scrollPending=true;Dispatcher.BeginInvoke(DispatcherPriority.Loaded,new Action(()=>{
-                    scrollPending=false;if(follow.Revision!=scrollRevision)return; // A reader moved after this update; leave their position alone.
-                    if(follow.Following)Scroll.ScrollToEnd();else Scroll.ScrollToVerticalOffset(savedOffset);
-                }));}
-            }
-        }
     }
 }

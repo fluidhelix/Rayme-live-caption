@@ -16,6 +16,7 @@ static class Program{
     static void Check(bool value,string why){if(!value)throw new Exception(why);checks++;Console.WriteLine("PASS "+why);}
     static void Until(Func<bool> predicate,string why,int seconds=30){var end=DateTime.UtcNow.AddSeconds(seconds);while(DateTime.UtcNow<end){if(predicate())return;Thread.Sleep(100);}throw new TimeoutException("Timed out: "+why);}
     [STAThread]static int Main(string[] args){
+        if(args.Length==2&&args[0]=="--overlay-ui")return OverlayUi(int.Parse(args[1]));
         try{
             package=Path.GetFullPath(args[0]);model=Path.GetFullPath(args[1]);data=Path.Combine(Path.GetTempPath(),"Rayme données 日本 "+Guid.NewGuid());Directory.CreateDirectory(data);
             Check(package.Contains(' ')&&package.Any(c=>c>127),"Extracted ZIP is tested from a spaced, non-ASCII directory");
@@ -71,6 +72,10 @@ static class Program{
                 Until(()=>{try{if(!Process.GetProcessesByName("whisper-server").Any(UnderPackage))return false;using var status=JsonDocument.Parse(health.GetStringAsync("http://127.0.0.1:8178/health").GetAwaiter().GetResult());return status.RootElement.GetProperty("status").GetString()=="ok";}catch{return false;}},"Normal-mode saved model readiness",180);
                 int[] owned=OwnedPids(session);Overlay().Kill();
                 var cancel=Find(session.Process.Id,"Cancel",ControlType.Button,30);Check(owned.All(Gone),"Normal-mode crash recovery stops owned processes before showing Retry/Cancel");
+                Invoke(Find(session.Process.Id,"Retry",ControlType.Button,30));
+                Until(()=>{try{using var status=JsonDocument.Parse(health.GetStringAsync("http://127.0.0.1:8178/health").GetAwaiter().GetResult());return Process.GetProcessesByName("whisper-server").Any(UnderPackage)&&status.RootElement.GetProperty("status").GetString()=="ok";}catch{return false;}},"Charcoal Retry restarts a healthy session without a dispatcher deadlock",180);
+                Check(!session.Process.HasExited,"Charcoal Retry preserves launcher supervision and starts a fresh session");
+                owned=OwnedPids(session);Overlay().Kill();cancel=Find(session.Process.Id,"Cancel",ControlType.Button,30);Check(owned.All(Gone),"Repeated recovery cleans up every restarted owned process");
                 Invoke(cancel);Check(session.Process.WaitForExit(10000)&&session.Process.ExitCode==2,"Normal user-facing failure still offers Cancel rather than pretending it was user Quit");
             }
             using(var session=new Session()){
@@ -82,6 +87,22 @@ static class Program{
             Console.WriteLine($"PASS: {checks} packaged Windows lifecycle/setup checks");return 0;
         }catch(Exception error){Console.Error.WriteLine(error);return 1;}
         finally{try{if(Directory.Exists(data))Directory.Delete(data,true);}catch(IOException){}}
+    }
+    static int OverlayUi(int pid){
+        try{
+            AutomationElement[] CaptionWindows()=>AutomationElement.RootElement.FindAll(TreeScope.Children,new PropertyCondition(AutomationElement.ProcessIdProperty,pid)).Cast<AutomationElement>().Where(w=>w.FindFirst(TreeScope.Descendants,new PropertyCondition(AutomationElement.ControlTypeProperty,ControlType.Document))!=null).ToArray();
+            AutomationElement Button(AutomationElement root,string name)=>root.FindFirst(TreeScope.Descendants,new AndCondition(new PropertyCondition(AutomationElement.NameProperty,name),new PropertyCondition(AutomationElement.ControlTypeProperty,ControlType.Button)))??throw new Exception("Missing control: "+name);
+            var main=FindWindow(pid,"Rayme Smart Live Captions");var detach=Button(main,"Detach captions");Until(()=>detach.Current.IsEnabled,"Both enabled sources can detach");
+            Check(CaptionWindows().Length==1,"Packaged overlay starts combined");Invoke(detach);Until(()=>CaptionWindows().Length==2,"Two real detached HWNDs");
+            var windows=CaptionWindows();Invoke(Button(windows[0],"Lock overlay position"));Until(()=>windows[0].FindFirst(TreeScope.Descendants,new PropertyCondition(AutomationElement.NameProperty,"Unlock overlay position"))!=null,"Independent detached lock");
+            Check(!((TransformPattern)windows[0].GetCurrentPattern(TransformPattern.Pattern)).Current.CanResize&&((TransformPattern)windows[1].GetCurrentPattern(TransformPattern.Pattern)).Current.CanResize,"Lock disables resize on exactly one packaged caption window");
+            var before=windows[0].Current.BoundingRectangle;var other=windows[1].Current.BoundingRectangle;((TransformPattern)windows[1].GetCurrentPattern(TransformPattern.Pattern)).Resize(other.Width+30,other.Height+20);
+            Check(windows[0].Current.BoundingRectangle==before,"Resizing the second packaged window preserves the first placement");
+            Invoke(Button(windows[0],"Open Controls"));Invoke(Find(pid,"Close Controls",ControlType.Button));Check(CaptionWindows().Length==2,"Closing detached Controls preserves both captions");
+            Invoke(Button(windows[1],"Reattach captions"));Until(()=>CaptionWindows().Length==1,"Real packaged reattachment");main=FindWindow(pid,"Rayme Smart Live Captions");
+            Check(!Process.GetProcessById(pid).HasExited,"Layout transitions do not trigger Quit Rayme");Invoke(Button(main,"Detach captions"));Until(()=>CaptionWindows().Length==2,"Detach again for parent-pipe EOF cleanup");
+            Console.WriteLine("PASS: packaged detached windows, independent resize/lock, Controls and reattachment; left detached for EOF teardown");return 0;
+        }catch(Exception error){Console.Error.WriteLine(error);return 1;}
     }
     static Process Start(string arguments){
         var start=new ProcessStartInfo(Path.Combine(package,"Rayme.exe"),arguments){UseShellExecute=false,CreateNoWindow=true,RedirectStandardInput=true,RedirectStandardOutput=true,RedirectStandardError=true,WorkingDirectory=package};

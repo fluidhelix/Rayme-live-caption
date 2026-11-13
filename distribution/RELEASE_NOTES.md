@@ -34,6 +34,30 @@ latency, especially on CPU with Large-v3-Turbo. Existing freshness and attributi
 guards remain. Privacy-preserving signal feedback can help identify low playback
 volume without recording audio or changing device settings.
 
+## Approved overlay update
+
+Black caption surfaces retain adjustable background opacity and the live 16–60
+text-size control. Only application-name titles use source colors; original and
+custom saved colors are preserved. A native HEX/RGB/hue picker offers Restore
+default. Controls, setup, error prompts, text menus and both tray menu paths use
+neutral charcoal rather than blue/navy surfaces. The Rayme icon is unchanged.
+
+One application fills the window; two use the combined upper/lower layout.
+Detaching is explicit and available only with both application sources enabled.
+The two views have independent placement/size/lock and reuse the existing shared
+caption stream. Reattach from either window or the tray; source removal returns
+to a single window. Background dragging respects text selection and controls.
+
+Continuous native segment inlines preserve reading anchors through corrections,
+with fixed status/LIVE geometry and reserved scrollbar width. Silence/status do
+not request bottom scrolling. Final correction remains accurate. Synthetic native
+geometry tests are distinct from physical-machine long-session acceptance.
+
+The launcher now bundles the same pinned .NET Windows Desktop framework already
+used by the overlay so its own recovery prompts can use the shared charcoal
+resources. No additional runtime installation is required. OS-owned file pickers
+and loader/security prompts follow Windows and are not forcibly recolored.
+
 ## Acceptance status
 
 Publication is gated on required Node, native, WPF GUI/lifecycle, portable ZIP

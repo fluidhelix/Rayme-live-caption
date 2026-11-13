@@ -1,3 +1,4 @@
+global using System.IO;
 using System.IO.Pipes;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -7,7 +8,7 @@ using Microsoft.Win32.SafeHandles;
 namespace Rayme.Launcher;
 
 internal static class Program {
-    [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int MessageBox(IntPtr owner,string text,string title,uint flags);
+    static int MessageBox(IntPtr owner,string text,string title,uint flags)=>Rayme.CharcoalDialog.Show(text,title,flags);
     static bool diagnostics;
     static int diagnosticBytes;
     static readonly object diagnosticLock=new();
@@ -47,7 +48,9 @@ internal static class Program {
             if(args.Contains("--verify-package"))return 0;
             stage="backend-session";
             while(true){
-                string? failure=Run(root).GetAwaiter().GetResult();
+                // A previous charcoal dialog may have installed a dispatcher context.
+                // Supervision must never await that blocked UI thread during Retry.
+                string? failure=Task.Run(()=>Run(root)).GetAwaiter().GetResult();
                 if(failure==null)return 0;
                 Report(new{type="session-failed",reason="backend-or-overlay-stopped"},true);
                 if(diagnostics)return 2;

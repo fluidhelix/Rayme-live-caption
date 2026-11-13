@@ -46,7 +46,7 @@ internal sealed partial class OverlayWindow {
             state.Apply(partial.Replace("\"final\":false","\"final\":true"));Render();UpdateLayout();
             UiCheck(ReferenceEquals(row,panels["b"])&&!row.IsLive&&captions.Children.Count==2,"Finalization reuses the same transcript panel without duplicates");
             UiCheck(row.Text.FontStyle==FontStyles.Normal&&row.Text.FontWeight==FontWeights.Normal&&Math.Abs(row.ActualHeight-height)<.1&&row.PartialText.Length==0&&row.FinalText.Contains("*sighing*"),"Partial-to-final transition preserves font and measured row height");
-            UiCheck(row.SourceLabel.Contains("Voice chat")&&row.Text.Text.Contains("*sighing*"),"Finalization preserves source label and annotation text");
+            UiCheck(row.SourceLabel.Contains("Voice chat")&&row.PlainText.Contains("*sighing*"),"Finalization preserves source label and annotation text");
             Capture(this,Path.Combine(output,"overlay-final.png"));
             UiCheck(lockSetting!.Template.FindName("Track",lockSetting) is Border,"Window toggles use the shared switch template");
             UiCheck(colorControls["device"].Any(c=>(string)c.Tag=="#A1D8C3"&&c.IsChecked==true),"Existing custom saved colors remain represented and selected");
@@ -66,7 +66,7 @@ internal sealed partial class OverlayWindow {
             }
             lockSetting!.IsChecked=false;
             UiCheck(!throughSetting!.IsEnabled&&!clickThrough,"Click-through stays disabled when the smoke harness has no registered recovery icon");
-            var toggleTrack=(Border)topSetting.Template.FindName("Track",topSetting);UiCheck(((SolidColorBrush)toggleTrack.Background).Color==((SolidColorBrush)Theme.Brush("#8DD6FF")).Color,"Switch checked state has the intended visual treatment");
+            var toggleTrack=(Border)topSetting.Template.FindName("Track",topSetting);UiCheck(((SolidColorBrush)toggleTrack.Background).Color==((SolidColorBrush)Theme.Brush("#D0D0D0")).Color,"Switch checked state has the intended visual treatment");
             var combo=selectors["a"].Select;combo.ApplyTemplate();UiCheck(combo.Template.FindName("PART_Popup",combo) is Popup,"Source selector uses the shared dropdown template");
             UiCheck(combo.FocusVisualStyle!=null&&topSetting.FocusVisualStyle!=null&&fontControl.FocusVisualStyle!=null,"Interactive controls have keyboard focus visuals");
             UiCheck(new IconBitmapDecoder(Theme.IconUri,BitmapCreateOptions.PreservePixelFormat,BitmapCacheOption.OnLoad).Frames.Count>=6,"Embedded Rayme icon includes multiple DPI resolutions");
@@ -94,7 +94,7 @@ internal sealed partial class OverlayWindow {
             var end=new KeyEventArgs(Keyboard.PrimaryDevice,PresentationSource.FromVisual(menu),0,Key.End){RoutedEvent=PreviewKeyDownEvent};menu.RaiseEvent(end);UiCheck(end.Handled&&menu.FocusedAction=="Quit Rayme","Tray End key focuses the last menu action");
             var down=new KeyEventArgs(Keyboard.PrimaryDevice,PresentationSource.FromVisual(menu),0,Key.Down){RoutedEvent=PreviewKeyDownEvent};menu.RaiseEvent(down);UiCheck(down.Handled&&menu.FocusedAction=="Show overlay","Tray arrow navigation wraps to the first action");
             menu.Close();menu=null;
-            using(var fallback=TrayIcon.FallbackMenu(BuildTrayActions()))UiCheck(fallback.Items.Count==6&&fallback.Items[3].Text=="Disable click-through"&&fallback.Items[4].Text=="Restore to primary monitor","Native fallback retains every recovery action");
+            using(var fallback=TrayIcon.FallbackMenu(BuildTrayActions()))UiCheck(fallback.Items.OfType<System.Windows.Forms.ToolStripMenuItem>().Count()==6&&fallback.Items[3].Text=="Disable click-through"&&fallback.Items[4].Text=="Restore to primary monitor","Native fallback retains every recovery action");
             Render();UiCheck(captions.Children.Count==2&&panels["b"].Visibility==Visibility.Visible&&panels["b"].FinalText.Contains("*sighing*"),"Finalized captions remain visible after opening and closing controls");
             OpenControls();
             HandleSetup("""{"type":"setup","required":true,"phase":"choose","processingMode":"auto","message":"Choose a model.","activeModel":null}""");
@@ -111,11 +111,12 @@ internal sealed partial class OverlayWindow {
             double reread=panels["a"].Scroll.VerticalOffset;var fixedA=panels["a"];var fixedB=panels["b"];
             state.Apply("""{"type":"caption","source":{"id":"b","generation":2,"name":"Voice chat","identity":"test-b"},"id":2,"final":false,"text":"More live words","capturedAt":100}""");Render();await Task.Delay(80);
             UiCheck(ReferenceEquals(fixedA,panels["a"])&&ReferenceEquals(fixedB,panels["b"])&&panels["a"].Scroll.VerticalOffset==reread,"Other-source captions preserve panel identity and the reader's independent scroll position");
-            state.Apply(JsonSerializer.Serialize(new{type="caption",source=new{id="b",generation=2,name="Voice chat",identity="test-b"},id=2,revision=2,final=false,text=string.Join(" ",Enumerable.Repeat("More conversation",80)),capturedAt=100}));
+            state.Apply(JsonSerializer.Serialize(new{type="caption",source=new{id="b",generation=2,name="Voice chat",identity="test-b"},id=2,revision=2,final=false,text="More live words "+string.Join(" ",Enumerable.Repeat("More conversation",80)),capturedAt=100}));
             state.Apply(JsonSerializer.Serialize(new{type="caption",source=new{id="a",generation=1,name="Browser conversation",identity="test-a"},id=28,final=true,text="Speech added while reading earlier words",capturedAt=101}));Render();await Task.Delay(100);
             UiCheck(panels["a"].Scroll.VerticalOffset==reread&&Math.Abs(panels["b"].Scroll.VerticalOffset-panels["b"].Scroll.ScrollableHeight)<1,"New text respects rereading in A while independently following B");
             state.Apply("""{"type":"audio-level","source":{"id":"a","generation":1,"name":"Browser conversation","identity":"test-a"},"rms":20,"dbfs":-64,"low":true}""");UpdateSettings();UiCheck(sourceStatus!.Text.Contains("increase application playback volume"),"Low-signal feedback explains playback volume without exposing audio");
             state.Apply("""{"type":"paused","paused":true}""");Render();UiCheck(captions.Children.Count==2&&panels["a"].FinalText.Contains("Conversation line"),"Pausing preserves fixed panel layout and continuous finalized conversation");
+            await ApprovedDesignSmoke(output);
             Click(Descendants<Button>(controls!).First(b=>b.Name=="ClearHistory"));
             using(var command=JsonDocument.Parse(smokeCommands.Last()))UiCheck(command.RootElement.GetProperty("type").GetString()=="clear","Clear history uses the existing shared command");
             state.Apply("""{"type":"cleared"}""");Render();UiCheck(panels.Values.All(p=>!p.IsLive)&&state.History.Count==0,"Server clear acknowledgement removes every caption row");
@@ -126,7 +127,7 @@ internal sealed partial class OverlayWindow {
             SmokePassed=true;
         } catch(Exception error) { SmokePassed=false;failure=error.ToString(); }
         finally {
-            menu?.Close();
+            menu?.Close();if(layout.Detached)Reattach();
             try{Directory.CreateDirectory(output);File.WriteAllText(Path.Combine(output,"checks.json"),JsonSerializer.Serialize(new{passed=SmokePassed,checks=uiChecks,failure},new JsonSerializerOptions{WriteIndented=true}));}catch(IOException){}
             Close();
         }

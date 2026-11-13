@@ -11,6 +11,7 @@ static class Program {
         catch (Exception ex) { Console.Error.WriteLine("FAIL: " + ex.Message); return 1; }
     }
     static void UnitTests() {
+        ApprovedDesignTests();
         LifecycleTests();
         UsabilityTests();
         var s = new CaptionState(); s.Apply(Event("reset",A)); s.Apply(Event("reset",B));
@@ -78,10 +79,35 @@ static class Program {
             bool rejected = false; try { _ = new SessionClient(url); } catch (ArgumentException) { rejected = true; } Check(rejected,"Only exact authenticated loopback sessions accepted");
         }
     }
+    static void ApprovedDesignTests(){
+        var s=new CaptionState();var layout=new CaptionLayout();Check(TranscriptPresentation.Slots(s).Length==0&&!layout.Detach(s),"No disabled-source caption panels and no detach with no sources");
+        s.Apply(Event("reset",B));Check(TranscriptPresentation.Slots(s).SequenceEqual(new[]{"b"})&&!CaptionLayout.CanDetach(s),"B alone fills the window and cannot detach");
+        s.Apply(Event("reset",A));Check(TranscriptPresentation.Slots(s).SequenceEqual(new[]{"a","b"})&&!layout.Detached,"Enabling both sources starts combined with deterministic A/B order");
+        Check(layout.Detach(s)&&layout.Detached,"Explicit detach requires both enabled sources");s.Apply("""{"type":"paused","paused":true}""");layout.Synchronize(s);Check(layout.Detached,"Pause does not change the chosen layout");
+        s.Apply(Event("source-removed",B));layout.Synchronize(s);Check(!layout.Detached&&TranscriptPresentation.Slots(s).SequenceEqual(new[]{"a"}),"Source removal automatically reattaches the remaining source");
+        s.Apply(Event("reset",B with{Generation=3}));layout.Synchronize(s);Check(!layout.Detached,"Re-enabling the second source does not detach automatically");
+        Check(layout.Detach(s),"Detaching again is explicit");layout.Reattach();Check(!layout.Detached,"Reattach returns to combined mode");
+        var old=new Preferences{ColorA="#A1B2C3",FontSize=41,BackgroundOpacity=.83,Placement=new(-1200,-900,640,360)};
+        var migrated=Preferences.Parse(JsonSerializer.Serialize(old));Check(migrated.ColorA==old.ColorA&&migrated.FontSize==41&&migrated.BackgroundOpacity==.83&&migrated.Placement==old.Placement,"Existing appearance and combined placement survive additive settings fields");
+        var distinct=migrated.WithSource("a",new(new(-1000,-500,500,220),"upper",true)).WithSource("b",new(new(200,-1200,450,280),"portrait",false));
+        var loaded=Preferences.Parse(JsonSerializer.Serialize(distinct));Check(loaded.DetachedA==distinct.DetachedA&&loaded.DetachedB==distinct.DetachedB&&loaded.DetachedA.Locked&&!loaded.DetachedB.Locked,"Independent detached placements and locks round-trip without persisting layout mode");
+        Check(!(JsonSerializer.Serialize(loaded).Contains("token")||JsonSerializer.Serialize(loaded).Contains("transcript")),"Layout preferences contain no credentials or transcript");
+        Check((loaded with{DetachedA=new(new(double.NaN,0,1,1),new string('x',200))}).Validate().DetachedA==new CaptionPlacement(),"Invalid detached placement and monitor recover safely");
+        foreach(string color in new[]{"#80DFFF","#FFD68A","#CBB9FF","#A3D9B1","#000000","#FFFFFF"}){var(h,sat,v)=SourceColor.Hsv(color);Check(SourceColor.FromHsv(h,sat,v)==color,"HSV and RGB preserve exact source color "+color);}
+        Check(SourceColor.Default("a")=="#80DFFF"&&SourceColor.Default("b")=="#FFD68A"&&SourceColor.Default("device")=="#CBB9FF","Restore default uses original Rayme values");
+        Check(SourceColor.TryHex("#a3d9b1",out var hex)&&hex=="#A3D9B1"&&!SourceColor.TryHex("#GGGGGG",out _)&&!SourceColor.TryHex("javascript:bad",out _),"Custom color validation accepts six hex digits only");
+        Check(SourceColor.ContrastOnBlack("#000000")==1&&SourceColor.ContrastOnBlack("#FFFFFF")>20,"Color-picker contrast warning uses actual contrast");
+        Check(TextPosition.Map("hello old ending","hello corrected ending",3)==3,"Reading anchors in unchanged prefix remain stable");
+        Check(TextPosition.Map("hello old ending","hello corrected ending",12)==18,"Reading anchors in unchanged suffix follow final correction");
+        var draft=new TranscriptSegment("a:1:1","early words",false);Check(!TextPosition.IsAppend(new[]{draft},new[]{draft with{Text="Correct words.",Final=true}}),"Final corrections are not append-follow commands");
+        Check(TextPosition.IsAppend(new[]{draft},new[]{draft with{Text="early words continue"}}),"Growing partials can follow new speech");
+        Check(!TextPosition.IsAppend(new[]{draft},new[]{draft})&&!TextPosition.IsAppend(new[]{draft},Array.Empty<TranscriptSegment>()),"Status and retirement cannot request bottom follow");
+    }
     static void UsabilityTests(){
         foreach(var (input,expected) in new[]{("Hello","Hello."),("Why?","Why?"),("Yes!","Yes!"),("Already.","Already."),("[laughter]","[laughter]"),("*sighing*","*sighing*"),("  More words  ","More words."),("He said “yes”","He said “yes.”"),("你好。","你好。"),("",""),("Wait…","Wait…"),("Continuing,","Continuing,"),("Listen:","Listen:"),("unfinished —","unfinished —"),("Hello [laughter]","Hello. [laughter]"),("Why? *sighing*","Why? *sighing*"),("[laughter] *sighing*","[laughter] *sighing*")})Check(TranscriptPresentation.Finish(input)==expected,"Natural final punctuation: "+input);
         var state=new CaptionState();state.Apply(Event("reset",A));
-        Check(TranscriptPresentation.Slots(state).SequenceEqual(new[]{"a","b"}),"Even one application reserves both fixed transcript panels");
+        Check(TranscriptPresentation.Slots(state).SequenceEqual(new[]{"a"}),"Only enabled A occupies a single full panel");
+        Check(TranscriptPresentation.Build(state,"a").Label==A.Name,"Caption title contains the actual application name only");
         state.Apply(Event("caption",A,1,text:"First draft"));Check(TranscriptPresentation.Build(state,"a").PartialText=="First draft","Partial occupies the live tail of its own panel");
         state.Apply(Event("caption",A,1,true,"First sentence"));state.Apply(Event("caption",A,2,text:"Second draft"));
         var text=TranscriptPresentation.Build(state,"a");Check(text.FinalText=="First sentence."&&text.PartialText=="Second draft","Final text and current partial are continuous, independent runs without duplication");

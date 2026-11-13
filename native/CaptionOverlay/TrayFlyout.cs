@@ -19,20 +19,20 @@ internal sealed class TrayFlyout : Window {
     bool dismissing;
     public TrayFlyout(TrayAction[] actions) {
         Title="Rayme tray menu";WindowStyle=WindowStyle.None;AllowsTransparency=true;Background=Brushes.Transparent;
-        Foreground=Theme.Brush("#F4F7FC");FontFamily=new FontFamily("Segoe UI Variable Text, Segoe UI");ShowInTaskbar=false;Topmost=true;ResizeMode=ResizeMode.NoResize;
+        Foreground=Theme.Brush("#F2F2F2");FontFamily=new FontFamily("Segoe UI Variable Text, Segoe UI");ShowInTaskbar=false;Topmost=true;ResizeMode=ResizeMode.NoResize;
         Width=286;SizeToContent=SizeToContent.Height;
         KeyboardNavigation.SetTabNavigation(items,KeyboardNavigationMode.Cycle);
-        var heading=new DockPanel { Margin=new Thickness(10,8,8,12) };var mark=Theme.Mark(26);mark.Margin=new Thickness(0,0,10,0);heading.Children.Add(mark);var words=new StackPanel();words.Children.Add(Theme.Text("Rayme",15,strong:true));words.Children.Add(Theme.Text("Live captions, within reach",11,"#B9C7DC"));heading.Children.Add(words);items.Children.Add(heading);
+        var heading=new DockPanel { Margin=new Thickness(10,8,8,12) };var mark=Theme.Mark(26);mark.Margin=new Thickness(0,0,10,0);heading.Children.Add(mark);var words=new StackPanel();words.Children.Add(Theme.Text("Rayme",15,strong:true));words.Children.Add(Theme.Text("Live captions, within reach",11,"#B9B9B9"));heading.Children.Add(words);items.Children.Add(heading);
         for(int i=0;i<actions.Length;i++) {
             var action=actions[i];
-            if(i==actions.Length-1)items.Children.Add(new Border { Height=1,Background=Theme.Brush("#3D4D63"),Margin=new Thickness(8,6,8,6) });
+            if(i==actions.Length-1)items.Children.Add(new Border { Height=1,Background=Theme.Brush("#474747"),Margin=new Thickness(8,6,8,6) });
             var b=Theme.Button(action.Label,(_,_)=>{Close();action.Execute();},action.Glyph);
             b.HorizontalContentAlignment=HorizontalAlignment.Left;b.Margin=new Thickness(0,2,0,2);b.BorderBrush=Brushes.Transparent;b.Background=Brushes.Transparent;
             // The shared button template aligns arbitrary content using this property.
             if(b.Content is StackPanel row)row.HorizontalAlignment=HorizontalAlignment.Left;
             items.Children.Add(b);buttons.Add(b);
         }
-        Content=new Border { Background=Theme.Brush("#182231"),CornerRadius=new CornerRadius(14),BorderBrush=Theme.Brush("#60718B"),BorderThickness=new Thickness(1),Padding=new Thickness(8),Child=items };
+        Content=new Border { Background=Theme.Brush("#181818"),CornerRadius=new CornerRadius(14),BorderBrush=Theme.Brush("#606060"),BorderThickness=new Thickness(1),Padding=new Thickness(8),Child=items };
         Closing+=(_,_)=>dismissing=true;
         Deactivated+=(_,_)=>{if(!dismissing)Close();};
         PreviewKeyDown+=(_,e)=>{

@@ -300,7 +300,14 @@ jobs:
           $process = Start-Process ./artifacts/windows-overlay/CaptionOverlay.exe -ArgumentList '--smoke-test' -PassThru
           if (!$process.WaitForExit(30000)) { $process.Kill(); throw 'Packaged overlay smoke test timed out' }
           $process.Refresh()
-          if ($process.ExitCode -ne 0) { throw "Packaged WPF smoke test failed: $($process.ExitCode)" }
+          if ($process.ExitCode -ne 0) {
+            if (Test-Path artifacts/overlay-ui/checks.json) {
+              $failure = [string]((Get-Content artifacts/overlay-ui/checks.json -Raw | ConvertFrom-Json).failure)
+              $failure = $failure.Substring(0, [Math]::Min(8000, $failure.Length)).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+              Write-Output "::error title=Native WPF GUI smoke::$failure"
+            }
+            throw "Packaged WPF smoke test failed: $($process.ExitCode)"
+          }
           Get-FileHash ./artifacts/windows-overlay/CaptionOverlay.exe -Algorithm SHA256 | Format-List | Out-File artifacts/windows-overlay/SHA256.txt
           Copy-Item PHASE3_REPORT.md artifacts/windows-overlay/
           Copy-Item UI_REFINEMENT_REPORT.md artifacts/windows-overlay/

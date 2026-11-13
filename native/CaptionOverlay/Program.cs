@@ -27,9 +27,15 @@ internal static class Program {
                 while ((c = Console.In.Read()) != -1 && c != '\n') { if (line.Length >= 4096) throw new InvalidOperationException(); line.Append((char)c); }
                 using var doc = JsonDocument.Parse(line.ToString()); client = new SessionClient(doc.RootElement.GetProperty("url").GetString()!);
                 capability = doc.RootElement.TryGetProperty("capability",out var intent) ? intent.GetString() ?? "" : "";
-            } catch { MessageBox.Show("Start Rayme.exe from the complete portable application folder. A private local session handoff is required.", "Rayme captions"); return 1; }
+            } catch { Rayme.CharcoalDialog.Show("Start Rayme.exe from the complete portable application folder. A private local session handoff is required.", "Rayme captions",0x10); return 1; }
         }
         var app = new Application { ShutdownMode = ShutdownMode.OnMainWindowClose };
+#if !RAYME_DISTRIBUTION
+        if(smoke)app.DispatcherUnhandledException+=(_,e)=>{
+            string folder=Environment.GetEnvironmentVariable("RAYME_UI_SMOKE_OUTPUT")??Path.Combine(Environment.CurrentDirectory,"artifacts","overlay-ui");Directory.CreateDirectory(folder);
+            File.WriteAllText(Path.Combine(folder,"checks.json"),JsonSerializer.Serialize(new{passed=false,failure=e.Exception.ToString(),checks=Array.Empty<string>()}));e.Handled=true;app.Shutdown(1);
+        };
+#endif
         Theme.Install(app);
         var window = new OverlayWindow(client, smoke); app.MainWindow = window;
         window.ExitCapability=capability;

@@ -15,12 +15,12 @@ internal sealed partial class OverlayWindow {
     void AddProcessingControls(Panel panel){
         var row=new StackPanel();
         row.Children.Add(Theme.Text("Requested processing mode",14,strong:true));
-        row.Children.Add(Theme.Text("Auto prefers compatible NVIDIA CUDA. Switching reloads the model, then restores your selected sources and pause state.",12,"#B9C7DC"));
+        row.Children.Add(Theme.Text("Auto prefers compatible NVIDIA CUDA. Switching reloads the model, then restores your selected sources and pause state.",12,"#B9B9B9"));
         var select=new ComboBox { ItemsSource=new[]{new Choice("auto","Auto — prefer compatible NVIDIA GPU"),new Choice("cuda","NVIDIA GPU (CUDA)"),new Choice("cpu","CPU")},DisplayMemberPath="Name",SelectedValuePath="Id",SelectedValue=requestedMode,Margin=new Thickness(0,10,0,8) };
         Theme.Accessible(select,"Speech processing mode");processingChoices.Add(select);
         select.Unloaded+=(_,_)=>processingChoices.Remove(select);
         select.SelectionChanged+=async(_,_)=>{if(!processingSync&&select.SelectedValue is string mode)await Send(new{type="setup",action="mode",mode});};
-        row.Children.Add(select);var actual=Theme.Text("Actual device: not initialized. GPU acceleration is not inferred from the selected mode.",12,"#D5E5F5");Theme.Accessible(actual,"Actual speech processing device");processingLabels.Add(actual);actual.Unloaded+=(_,_)=>processingLabels.Remove(actual);row.Children.Add(actual);panel.Children.Add(Theme.Card(row));UpdateProcessingControls();
+        row.Children.Add(select);var actual=Theme.Text("Actual device: not initialized. GPU acceleration is not inferred from the selected mode.",12,"#D5D5D5");Theme.Accessible(actual,"Actual speech processing device");processingLabels.Add(actual);actual.Unloaded+=(_,_)=>processingLabels.Remove(actual);row.Children.Add(actual);panel.Children.Add(Theme.Card(row));UpdateProcessingControls();
     }
     void HandleProcessing(string json){
         using var doc=JsonDocument.Parse(json);var root=doc.RootElement;var type=root.GetProperty("type").GetString();JsonElement data;

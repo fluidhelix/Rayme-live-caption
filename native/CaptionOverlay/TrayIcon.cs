@@ -82,8 +82,8 @@ internal sealed class TrayIcon : IDisposable {
     }
     void ReturnTrayFocus(){if(!disposed&&Available){var data=Data();Shell_NotifyIcon(3,ref data);}}
     internal static Forms.ContextMenuStrip FallbackMenu(TrayAction[] actions) {
-        var menu=new Forms.ContextMenuStrip { BackColor=Color.FromArgb(24,34,49),ForeColor=Color.FromArgb(244,247,252),Font=new Font("Segoe UI",10),ShowImageMargin=false,Renderer=new DarkMenuRenderer() };
-        foreach(var item in actions)menu.Items.Add(item.Label,null,(_,_)=>item.Execute());
+        var menu=new Forms.ContextMenuStrip { BackColor=Color.FromArgb(24,24,24),ForeColor=Color.FromArgb(242,242,242),Font=new Font("Segoe UI",10),ShowImageMargin=false,Renderer=new DarkMenuRenderer() };
+        foreach(var item in actions){if(item.Label=="Quit Rayme")menu.Items.Add(new Forms.ToolStripSeparator());menu.Items.Add(item.Label,null,(_,_)=>item.Execute());}
         return menu;
     }
     public void Dispose() {
@@ -94,9 +94,19 @@ internal sealed class TrayIcon : IDisposable {
         public DarkMenuRenderer():base(new MenuColors()){RoundedEdges=true;}
     }
     sealed class MenuColors : Forms.ProfessionalColorTable {
-        public override Color MenuItemSelected=>Color.FromArgb(47,69,94);
-        public override Color MenuItemBorder=>Color.FromArgb(145,217,255);
-        public override Color ToolStripDropDownBackground=>Color.FromArgb(24,34,49);
-        public override Color MenuBorder=>Color.FromArgb(96,113,139);
+        public override Color MenuItemSelectedGradientBegin=>Color.FromArgb(48,48,48);
+        public override Color MenuItemSelectedGradientEnd=>Color.FromArgb(48,48,48);
+        public override Color MenuItemPressedGradientBegin=>Color.FromArgb(36,36,36);
+        public override Color MenuItemPressedGradientMiddle=>Color.FromArgb(36,36,36);
+        public override Color MenuItemPressedGradientEnd=>Color.FromArgb(36,36,36);
+        public override Color SeparatorDark=>Color.FromArgb(60,60,60);
+        public override Color SeparatorLight=>Color.FromArgb(60,60,60);
+        public override Color ImageMarginGradientBegin=>Color.FromArgb(24,24,24);
+        public override Color ImageMarginGradientMiddle=>Color.FromArgb(24,24,24);
+        public override Color ImageMarginGradientEnd=>Color.FromArgb(24,24,24);
+        public override Color MenuItemSelected=>Color.FromArgb(48,48,48);
+        public override Color MenuItemBorder=>Color.FromArgb(150,150,150);
+        public override Color ToolStripDropDownBackground=>Color.FromArgb(24,24,24);
+        public override Color MenuBorder=>Color.FromArgb(96,96,96);
     }
 }

@@ -11,5 +11,6 @@
   <PropertyGroup Condition="'$(RaymeDistribution)' == 'true'"><DefineConstants>$(DefineConstants);RAYME_DISTRIBUTION</DefineConstants></PropertyGroup>
   <ItemGroup><ProjectReference Include="../CaptionOverlay.Core/CaptionOverlay.Core.csproj" /></ItemGroup>
   <ItemGroup><Resource Include="Assets/Rayme.ico" /></ItemGroup>
-  <ItemGroup Condition="'$(RaymeDistribution)' == 'true'"><Compile Remove="OverlayWindow.Smoke.cs" /></ItemGroup>
+  <ItemGroup Condition="'$(RaymeDistribution)' == 'true'"><Compile Remove="OverlayWindow.Smoke.cs" /><Compile Remove="OverlayWindow.DesignSmoke.cs" /></ItemGroup>
+  <ItemGroup><Compile Include="../Shared/CharcoalDialog.cs" Link="CharcoalDialog.cs"/></ItemGroup>
 </Project>

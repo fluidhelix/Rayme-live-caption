@@ -16,12 +16,18 @@ GET STARTED
    Use Controls > Audio sources to switch to Application A/B or pause capture.
    Choosing applications keeps fallback off for that session; every new launch
    starts with Windows default playback after model readiness.
-6. Drag/resize the floating window; adjust text size, opacity and colors.
+6. Drag blank caption surfaces or headers while unlocked; dragging text selects it.
+   Resize the floating windows; adjust text size (16–60), opacity and title colors.
+   Controls, setup and tray menus share a neutral charcoal theme. The color picker
+   supports HEX/RGB, hue and Restore default without changing body text colors.
    Hide keeps captions running in the tray. Closing Controls closes only that
    panel. Quit Rayme stops speech recognition, capture and all owned processes.
 
 CAPTION READING
-Application A stays above Application B in separate continuous transcript panels.
+One enabled application fills the window. With both enabled, A stays above B
+in separate continuous transcript panels. Detach is available only with both
+applications enabled; choose it explicitly for two independent caption windows.
+Reattach from either window or the tray. Disabling a source restores one window.
 Whole-device playback uses one panel. Each scrolls independently; captions follow
 new speech only while you are near the bottom. Scroll back down to resume follow.
 Finalized captions remain during silence and pauses. History is bounded to the
