@@ -9,7 +9,7 @@ const A={id:'a',generation:1,name:'Chrome',identity:'10:100'},B={id:'b',generati
 const tick=()=>new Promise(r=>setImmediate(r));
 function clock(){let now=100000,id=0;const timers=new Map();return{now:()=>now,set:(fn,ms)=>{timers.set(++id,{fn,at:now+ms});return id;},clear:id=>timers.delete(id),advance(ms){const end=now+ms;for(;;){const next=[...timers].filter(([,t])=>t.at<=end).sort((a,b)=>a[1].at-b[1].at)[0];if(!next)break;now=next[1].at;timers.delete(next[0]);next[1].fn();}now=end;},timers};}
 async function fixture(){const ui=await createUI({port:0}),time=clock(),calls=[],events=[];
- const q=new SourceScheduler(()=>new Promise((resolve,reject)=>calls.push({resolve,reject})),e=>{events.push(e);ui.publish(e);},(source,state,message,meta)=>ui.publish({type:'source-status',source,state,message,...meta}),time.now,{maxAgeMs:15000,setTimer:time.set,clearTimer:time.clear});
+ const q=new SourceScheduler((pcm,signal)=>new Promise((resolve,reject)=>calls.push({resolve,reject,signal})),e=>{events.push(e);ui.publish(e);},(source,state,message,meta)=>ui.publish({type:'source-status',source,state,message,...meta}),time.now,{maxAgeMs:15000,setTimer:time.set,clearTimer:time.clear});
  for(const s of[A,B])q.attach(s);
  return{ui,time,calls,events,q,add:(s,id,final=false)=>q.add(s,{id,final,pcm:Buffer.alloc(640),capturedAt:time.now(),audioEndAt:time.now()}),close:async()=>{q.close();await ui.close();}};
 }
@@ -80,4 +80,25 @@ test('a missing final does not erase a superseded draft; late valid final replac
 });
 test('bounded caption text never splits a surrogate pair at the existing native 4000-character boundary',async()=>{
  const ui=await createUI({port:0});try{caption(ui,A,1,'x'.repeat(3999)+'😀');assert.equal(ui.state.history[0].text,'x'.repeat(3999));assert.equal((await snapshot(ui)).history[0].text.length,3999);assert.equal(policy.text('text 😀'),'text 😀');}finally{await ui.close();}
+});
+test('long Unicode source names use one surrogate-safe budget on live events, browser policy and reconnect',async()=>{
+ const ui=await createUI({port:0});try{
+  const name='界'.repeat(199)+'😀'+'超長😀'.repeat(500),source={...A,name,identity:'preserved:😀:10:100'};
+  const normalized='界'.repeat(199);
+  assert.equal(policy.sourceName(name),normalized);assert.equal(policy.sourceName('界'.repeat(198)+'😀tail'),'界'.repeat(198)+'😀');
+  const raw=[];for(let id=1;id<=210;id++){raw.push({type:'caption',source,id,revision:id,final:true,text:'x'.repeat(400),capturedAt:id});caption(ui,source,id,'x'.repeat(400));}
+  const live=ui.state.history.slice(),expected=Math.floor(policy.limits.bytes/policy.cost(raw[0]));
+  assert.equal(live.length,expected);assert.ok(expected<200);assert.deepEqual(policy.trim(raw),live);
+  assert.ok(live.every(c=>c.source.name===normalized&&c.source.identity===source.identity));assert.equal(source.name,name);
+  assert.deepEqual((await snapshot(ui)).history,live);assert.equal(ui.state.sources.a.source.name,normalized);
+ }finally{await ui.close();}
+});
+test('Clear History removes displayed content but does not cancel fresh recognition already in progress',async()=>{
+ for(const final of[false,true]){const f=await fixture();try{
+  caption(f.ui,A,1,'Previously displayed speech');f.add(A,2,final);const active=f.calls.shift();
+  f.ui.publish({type:'cleared'});assert.equal(f.ui.state.history.length,0);assert.equal(f.ui.state.partials.a,undefined);assert.equal(active.signal.aborted,false);
+  active.resolve('Fresh completion after Clear');await tick();
+  assert.equal(active.signal.aborted,false);assert.equal(f.events.filter(e=>e.type==='caption').length,1);
+  if(final)assert.deepEqual(f.ui.state.history.map(c=>c.text),['Fresh completion after Clear']);else assert.equal(f.ui.state.partials.a.text,'Fresh completion after Clear');
+ }finally{await f.close();}}
 });

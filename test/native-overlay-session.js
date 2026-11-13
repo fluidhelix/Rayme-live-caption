@@ -19,7 +19,8 @@ async function run() {
         ui.publish({type:'segment-retired',source:a,id:2,revision:2,terminal:false});ui.publish({type:'caption',source:a,id:2,revision:1,final:false,text:'late A'});status('stage-retired-partial');
         ui.publish({type:'caption',source:a,id:3,revision:3,final:false,text:'newer A'});ui.publish({type:'segment-retired',source:a,id:2,revision:2,terminal:true});status('stage-newer-partial');
         ui.publish({type:'source-status',source:a,component:'inference',state:'unavailable',message:'Local transcription failed.'});ui.publish({type:'reset',source:a});ui.publish({type:'segment-retired',source:b,id:2,revision:2,terminal:false});status('stage-preserved-error');}
-      else {ui.publish({type:'source-removed',source:a});ui.publish({type:'reset',source:next});caption(b,2,true,'B remains attributed',25);caption(next,1,false,'New application partial',30);caption(next,1,true,'New application final',30);status('stage-reconnect');}
+      else if(refreshes===2){ui.publish({type:'source-removed',source:a});ui.publish({type:'reset',source:next});caption(b,2,true,'B remains attributed',25);caption(next,1,false,'New application partial',30);caption(next,1,true,'New application final',30);status('stage-reconnect');}
+      else {const long={...next,generation:4,name:'界'.repeat(199)+'😀'+'超長😀'.repeat(500)};ui.publish({type:'source-removed',source:next});ui.publish({type:'reset',source:long});for(let id=1;id<=210;id++)caption(long,id,true,'x'.repeat(400),id);ui.publish({type:'status',message:'stage-long-name',retainedIds:ui.state.history.filter(c=>c.source.id==='a').map(c=>c.id)});}
     },onPause:paused=>{pauses.push(paused);ui.publish({type:'paused',paused});},onConfigure:(slot,descriptor)=>{
       assert.equal(slot,'a');assert.equal(descriptor.id,'11:101');
       if(configured){caption(next,237,true,'Recovered retained tail',237);status('stage-complete');return;}
@@ -41,7 +42,7 @@ async function run() {
     child.stdin.on('error',()=>{});child.stdin.end(JSON.stringify({url:ui.url})+'\n');
     const timer=setTimeout(()=>child.kill(),40000);
     let code;try{[code]=await once(child,'exit');}finally{clearTimeout(timer);}
-    assert.equal(code,0,output);assert.ok(cleared,'Clear must reach the second connected client');assert.ok(configured);assert.deepEqual(pauses,[true,false]);assert.equal(refreshes,2);
+    assert.equal(code,0,output);assert.ok(cleared,'Clear must reach the second connected client');assert.ok(configured);assert.deepEqual(pauses,[true,false]);assert.equal(refreshes,3);
     assert.ok(!output.includes(new URL(ui.url).searchParams.get('token')),'No session credentials in test output');
     process.stdout.write(output);console.log('PASS: native authentication, controls, reconnect snapshot, and cross-client Clear History');
   }finally{child?.kill();observer?.terminate();await ui?.close();}

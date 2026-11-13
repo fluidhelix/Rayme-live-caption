@@ -1,5 +1,7 @@
 # Caption reading: local implementation for review
 
+The focused audit follow-up is documented in [CAPTION_READING_AUDIT_FOLLOWUP.md](CAPTION_READING_AUDIT_FOLLOWUP.md). The results below record the original `0163faf` implementation; the follow-up adds keyboard/command selection protection, equivalent source-name accounting and stronger pending Windows geometry coverage.
+
 Baseline: `e69682b7b6893fab09f3f3033d8a7d851be4b6c8` (`main`, rc.44). Remote main was fetched before implementation and matched the baseline. This work is **local only**: no push, Windows workflow dispatch, tag or release publication is authorized or performed. The final local commit is available from `git log -1`; this report is part of that commit.
 
 ## Verified mechanisms and limits of the diagnosis
@@ -15,6 +17,7 @@ These are verified code/state mechanisms. They do not prove which individual lin
 
 - Final captions remain authoritative and immutable under retirement. They have no wall-clock expiry. Clear, source removal/replacement and bounded cleanup remain valid removal operations.
 - The existing `segment-retired` event gains an optional `retain: true`. This retires the live partial under the same revision/terminal guards and moves the **already displayed** matching draft into retained history with `final: false, unfinished: true`. The event carries no extra transcript copy. If Clear has already removed the partial, a later timer cannot reconstruct it.
+- Clear History is not recognition cancellation: active/queued jobs and capture continue. A still-fresh completion may be published after Clear and enter the new replay history. This existing behavior is unchanged; the audit follow-up explicitly tests in-flight partial and final completion after Clear.
 - Freshness/backlog skips, inference failure, empty recognition and displayed-partial expiration request retention. A newer segment without an older final retains the superseded draft. A capture generation change for the same application retains the visible draft as unfinished while invalidating all old live/inference work. Application identity replacement/removal still clears its history.
 - Rejected insufficient audio retains nothing. An explicit terminal rejection without `retain` also removes only the matching unfinished record, never finalized history or a newer segment.
 - A fresh accepted partial/final replaces the retained record with the same source/generation/segment identity. Nonterminal retirement allows a genuinely newer revision; terminal retirement and generation/identity guards still reject late results. Old results are never published merely because their useful draft is retained.

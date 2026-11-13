@@ -107,6 +107,15 @@ static class Program {
 
     }
     static void ReadingTests(){
+        var longSource=A with{Name=new string('界',199)+"😀"+string.Concat(Enumerable.Repeat("超長😀",500)),Identity="preserved:😀:10:100"};
+        var longState=new CaptionState();for(int id=1;id<=210;id++)longState.Apply(Event("caption",longSource,id,true,new string('x',400),id));
+        int expected=HistoryPolicy.Bytes/HistoryPolicy.Cost(new(longSource,1,true,new string('x',400),1));var liveIds=longState.History.Select(c=>c.Id).ToArray();
+        Check(longState.History.Count==expected&&expected<200,"Long Unicode source names use normalized metadata in the native byte budget");
+        Check(longState.History.All(c=>c.Source.Name==new string('界',199)&&c.Source.Identity==longSource.Identity),"Source-name truncation preserves surrogate pairs and source identities");
+        Check(HistoryPolicy.SourceName(new string('界',198)+"😀tail")==new string('界',198)+"😀","Source-name boundary retains a complete surrogate pair when it fits");
+        var rawSource=new{id=longSource.Id,generation=longSource.Generation,name=longSource.Name,identity=longSource.Identity};
+        longState.Apply(JsonSerializer.Serialize(new{type="snapshot",sources=new{a=new{type="source-status",source=rawSource,state="waiting"}},history=longState.History.Select(c=>new{source=rawSource,id=c.Id,text=c.Text,final=true,capturedAt=c.CapturedAt}).ToArray(),partials=new{}}));
+        Check(longState.History.Select(c=>c.Id).SequenceEqual(liveIds),"Long-name reconnect normalization cannot discard additional live native history");
         Check(HistoryPolicy.Limit(new string('x',3999)+"😀")==new string('x',3999)&&HistoryPolicy.Limit("text 😀")=="text 😀","Native text bound never splits a Unicode surrogate pair");
         var s=new CaptionState();var device=new Source("device",3,"Playback","default");
         foreach(var source in new[]{A,B,device})for(int id=1;id<=235;id++)s.Apply(Event("caption",source,id,true,capturedAt:id));
@@ -137,6 +146,8 @@ static class Program {
         foreach(string change in new[]{"prefix extension","non-prefix revision with new words","shorter correction","partial-to-final"}){Check(follow.NeedsReveal(220,250,200),"Following reveals an obscured latest line for "+change);Check(!follow.NeedsReveal(170,195,200),"Already visible latest line needs no scroll for "+change);}
         long ticket=follow.Revision;follow.BeginNavigation();Check(!follow.Following&&follow.Revision>ticket,"Explicit reader input invalidates scheduled following before scroll events arrive");follow.ReaderMoved(0,500);Check(!follow.NeedsReveal(220,250,200)&&other.Following,"Manual rereading blocks follow independently of the other source");
         follow.ReaderMoved(500,500);Check(follow.NeedsReveal(220,250,200),"Manual return to the bottom resumes following");
+        follow.ReaderMoved(500,500,selecting:true);Check(!follow.NeedsReveal(220,250,200),"An active user selection prevents near-bottom follow from rearming");
+        follow.ReaderMoved(500,500);Check(follow.Following,"Explicit non-selection navigation back to the bottom resumes following");
         Check(!follow.NeedsReveal(double.NaN,250,200)&&!follow.NeedsReveal(0,0,0),"Unmeasured layout cannot request a spurious scroll");
     }
     static void UsabilityTests(){
@@ -194,7 +205,7 @@ static class Program {
         // Test harness uses the same private stdin handoff and the production Node server.
         using var handoff = JsonDocument.Parse((await Console.In.ReadLineAsync())!);
         await using var client = new SessionClient(handoff.RootElement.GetProperty("url").GetString()!);
-        var s = new CaptionState(); int snapshots=0; bool reconnect=false;
+        var s = new CaptionState(); int snapshots=0; bool reconnect=false;long[] longNameIds=[];
         var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var run = client.RunAsync(async json => {
             s.Apply(json); using var doc = JsonDocument.Parse(json); string? type=doc.RootElement.GetProperty("type").GetString();
@@ -202,7 +213,8 @@ static class Program {
                 snapshots++;
                 if (snapshots == 1) { Check(s.Sources.Count == 2 && s.ProcessSupported,"Authenticated initial snapshot"); Check(await client.SendAsync(new { type="refresh" }),"Refresh command sent"); }
                 else if(snapshots==2) { Check(s.History.Count == 2 && s.History.Select(x=>x.Key).Distinct().Count()==2,"Reconnect snapshot does not duplicate finals or restore replaced sources"); await client.SendAsync(new {type="pause",paused=false}); }
-                else {Check(s.History.Count==400&&s.History.Count(c=>c.Source.Id=="a")==200&&s.History.Count(c=>c.Source.Id=="b")==200,"Authenticated large reconnect snapshot obeys independent retention budgets");Check(s.History.Single(c=>c.Source.Id=="a"&&c.Id==237) is{Unfinished:true,Final:false}&&s.Partials.Count==0,"Large native snapshot preserves unfinished classification and retirement guards");await client.SendAsync(new{type="configure",slot="a",id="11:101",enabled=true});}
+                else if(snapshots==3){Check(s.History.Count==400&&s.History.Count(c=>c.Source.Id=="a")==200&&s.History.Count(c=>c.Source.Id=="b")==200,"Authenticated large reconnect snapshot obeys independent retention budgets");Check(s.History.Single(c=>c.Source.Id=="a"&&c.Id==237) is{Unfinished:true,Final:false}&&s.Partials.Count==0,"Large native snapshot preserves unfinished classification and retirement guards");await client.SendAsync(new{type="configure",slot="a",id="11:101",enabled=true});}
+                else {Check(snapshots==4&&s.History.Where(c=>c.Source.Id=="a").Select(c=>c.Id).SequenceEqual(longNameIds),"Actual long-Unicode-name reconnect preserves live backend/native retention exactly");Check(s.Sources["a"].Source.Name==new string('界',199)&&s.Sources["a"].Source.Identity=="11:101","Wire source-name normalization preserves identity across reconnect");done.TrySetResult();}
             }
             if (type == "status" && doc.RootElement.GetProperty("message").GetString() == "stage-captions") {
                 Check(s.History.Count == 2 && s.Partials.Count == 0 && s.History[0].Source.Id == "a","Interleaved live partials and finals over real WebSocket");
@@ -218,7 +230,8 @@ static class Program {
             if (type == "cleared") { Check(s.History.Count==0 && s.Partials.Count==0,"Clear broadcast through production server"); await client.SendAsync(new {type="refresh"}); }
             if (type == "status" && doc.RootElement.GetProperty("message").GetString() == "stage-reconnect" && !reconnect) { reconnect=true; client.Reconnect(); }
             if(type=="status"&&doc.RootElement.GetProperty("message").GetString()=="stage-retention"){Check(s.History.Count==400&&s.History.Single(c=>c.Source.Id=="a"&&c.Id==237).Unfinished,"Live backend/native history budgets and retained drafts agree before reconnect");client.Reconnect();}
-            if (type == "status" && doc.RootElement.GetProperty("message").GetString() == "stage-complete") { Check(snapshots==3,"Exactly two requested reconnects");Check(s.History.Count==400&&s.History.Single(c=>c.Source.Id=="a"&&c.Id==237) is{Final:true,Unfinished:false},"Fresh final replaces a retained snapshot draft without duplicating native history");done.TrySetResult(); }
+            if (type == "status" && doc.RootElement.GetProperty("message").GetString() == "stage-complete") { Check(snapshots==3,"Exactly two requested reconnects before long-name coverage");Check(s.History.Count==400&&s.History.Single(c=>c.Source.Id=="a"&&c.Id==237) is{Final:true,Unfinished:false},"Fresh final replaces a retained snapshot draft without duplicating native history");await client.SendAsync(new{type="refresh"}); }
+            if(type=="status"&&doc.RootElement.GetProperty("message").GetString()=="stage-long-name"){longNameIds=doc.RootElement.GetProperty("retainedIds").EnumerateArray().Select(v=>v.GetInt64()).ToArray();Check(longNameIds.Length<200&&s.History.Where(c=>c.Source.Id=="a").Select(c=>c.Id).SequenceEqual(longNameIds),"Live native and backend byte-budget decisions agree for a long Unicode source name");client.Reconnect();}
         }, _ => Task.CompletedTask);
         var winner = await Task.WhenAny(done.Task,run,Task.Delay(30000));
         if (winner == run) await run;

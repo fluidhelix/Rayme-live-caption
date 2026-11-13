@@ -22,13 +22,32 @@ internal sealed class TranscriptPanel : Border {
     ScrollFollow follow=new();
     string identity="";
     Anchor? lastAnchor,pendingAnchor;
-    bool pending,settling,readerNavigating,thumbDragging,pendingReflow;
+    bool pending,settling,readerNavigating,readerSelecting,thumbDragging,pendingReflow;
     double pendingOffset;
     long pendingRevision;
     bool lastSetup;
     readonly bool traceEnabled;
     readonly Queue<object> geometry=[];
     sealed record Anchor(string Key,int Index,double Y,string OldText,string[] Neighbors);
+    static readonly HashSet<ICommand> selectionCommands=[ApplicationCommands.SelectAll,
+        EditingCommands.SelectLeftByCharacter,EditingCommands.SelectRightByCharacter,
+        EditingCommands.SelectLeftByWord,EditingCommands.SelectRightByWord,
+        EditingCommands.SelectUpByLine,EditingCommands.SelectDownByLine,
+        EditingCommands.SelectUpByParagraph,EditingCommands.SelectDownByParagraph,
+        EditingCommands.SelectUpByPage,EditingCommands.SelectDownByPage,
+        EditingCommands.SelectToLineStart,EditingCommands.SelectToLineEnd,
+        EditingCommands.SelectToDocumentStart,EditingCommands.SelectToDocumentEnd];
+    static readonly HashSet<ICommand> navigationCommands=[
+        EditingCommands.MoveLeftByCharacter,EditingCommands.MoveRightByCharacter,
+        EditingCommands.MoveLeftByWord,EditingCommands.MoveRightByWord,
+        EditingCommands.MoveUpByLine,EditingCommands.MoveDownByLine,
+        EditingCommands.MoveUpByParagraph,EditingCommands.MoveDownByParagraph,
+        EditingCommands.MoveUpByPage,EditingCommands.MoveDownByPage,
+        EditingCommands.MoveToLineStart,EditingCommands.MoveToLineEnd,
+        EditingCommands.MoveToDocumentStart,EditingCommands.MoveToDocumentEnd,
+        ScrollBar.LineUpCommand,ScrollBar.LineDownCommand,ScrollBar.PageUpCommand,ScrollBar.PageDownCommand,
+        ScrollBar.ScrollToTopCommand,ScrollBar.ScrollToBottomCommand,ScrollBar.ScrollToHomeCommand,ScrollBar.ScrollToEndCommand,
+        ScrollBar.ScrollToVerticalOffsetCommand,ScrollBar.DeferScrollToVerticalOffsetCommand];
     internal string Slot {get;}
     internal bool IsLive=>live.Visibility==Visibility.Visible&&live.Text=="LIVE";
     internal string SourceLabel=>label.Text;
@@ -52,10 +71,23 @@ internal sealed class TranscriptPanel : Border {
         // WPF also raises it for layout, extent clamping and our own restoration.
         Text.AddHandler(ScrollViewer.ScrollChangedEvent,new ScrollChangedEventHandler((_,_)=>{if(readerNavigating)ScheduleReaderPosition();}));
         Text.PreviewMouseWheel+=(_,_)=>ReaderNavigating();
-        Text.PreviewKeyDown+=(_,e)=>{if(e.Key is Key.Up or Key.Down or Key.PageUp or Key.PageDown or Key.Home or Key.End or Key.Space)ReaderNavigating();};
-        Text.PreviewMouseDown+=(_,e)=>{if(WindowDrag.Ancestor<ScrollBar>(e.OriginalSource as DependencyObject)!=null||HasTextAt(e.GetPosition(Text)))ReaderNavigating();};
-        Text.AddHandler(Thumb.DragStartedEvent,new DragStartedEventHandler((_,_)=>{thumbDragging=true;ReaderNavigating();}));
-        Text.AddHandler(Thumb.DragCompletedEvent,new DragCompletedEventHandler((_,_)=>{thumbDragging=false;ScheduleReaderPosition();}));
+        Text.AddHandler(Keyboard.PreviewKeyDownEvent,new KeyEventHandler((_,e)=>{
+            bool selectAll=e.Key==Key.A&&(Keyboard.Modifiers&ModifierKeys.Control)!=0;
+            if(selectAll||e.Key is Key.Left or Key.Right or Key.Up or Key.Down or Key.PageUp or Key.PageDown or Key.Home or Key.End or Key.Space)
+                ReaderNavigating(selectAll||(Keyboard.Modifiers&ModifierKeys.Shift)!=0);
+        }),true);
+        // SelectAll from the context menu and the editor's Shift/Ctrl+Shift
+        // bindings use routed commands, including commands invoked by assistive UI.
+        Text.AddHandler(CommandManager.PreviewExecutedEvent,new ExecutedRoutedEventHandler((_,e)=>{
+            if(selectionCommands.Contains(e.Command))ReaderNavigating(true);
+            // Embedded scrollbar buttons route their commands to ScrollViewer;
+            // unlike standalone bars, they need not raise ScrollBar.Scroll.
+            else if(navigationCommands.Contains(e.Command))ReaderNavigating();
+        }),true);
+        Text.PreviewMouseDown+=(_,e)=>{if(WindowDrag.Ancestor<ScrollBar>(e.OriginalSource as DependencyObject)!=null)ReaderNavigating();else if(HasTextAt(e.GetPosition(Text)))ReaderNavigating(true);};
+        Text.AddHandler(ScrollBar.ScrollEvent,new ScrollEventHandler((_,_)=>ReaderNavigating()),true);
+        Text.AddHandler(Thumb.DragStartedEvent,new DragStartedEventHandler((_,_)=>{thumbDragging=true;ReaderNavigating();}),true);
+        Text.AddHandler(Thumb.DragCompletedEvent,new DragCompletedEventHandler((_,_)=>{thumbDragging=false;ScheduleReaderPosition();}),true);
         Text.PreviewMouseUp+=(_,_)=>ScheduleReaderPosition();
         Text.LostMouseCapture+=(_,_)=>{thumbDragging=false;ScheduleReaderPosition();};
         SizeChanged+=(_,_)=>{if(!settling)QueueRestore(lastAnchor,Text.VerticalOffset,true);};
@@ -69,15 +101,16 @@ internal sealed class TranscriptPanel : Border {
         public object ConvertBack(object v,Type t,object p,System.Globalization.CultureInfo c)=>throw new NotSupportedException();
     }
     internal bool Following=>follow.Following;
+    internal bool ScrollWorkPending=>pending||settling||readerNavigating;
     long navigationTicket;
-    internal void ReaderNavigating(){readerNavigating=true;follow.BeginNavigation();ScheduleReaderPosition();}
+    internal void ReaderNavigating(bool selecting=false){readerNavigating=true;readerSelecting=selecting;follow.BeginNavigation();ScheduleReaderPosition();}
     void ScheduleReaderPosition(){
         if(!readerNavigating)return;
         long ticket=++navigationTicket;
         Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle,new Action(()=>{
             if(ticket!=navigationTicket||!IsLoaded)return;
             // A held thumb or text-selection drag may keep moving between events.
-            follow.ReaderMoved(Text.VerticalOffset,Math.Max(0,Text.ExtentHeight-Text.Document.PagePadding.Bottom-Text.ViewportHeight));lastAnchor=Capture();
+            follow.ReaderMoved(Text.VerticalOffset,Math.Max(0,Text.ExtentHeight-Text.Document.PagePadding.Bottom-Text.ViewportHeight),readerSelecting&&!Text.Selection.IsEmpty);lastAnchor=Capture();
             if(!thumbDragging&&(Mouse.LeftButton!=MouseButtonState.Pressed||!Text.IsMouseCaptureWithin))readerNavigating=false;
             if(follow.Following&&!readerNavigating)QueueRestore(lastAnchor,Text.VerticalOffset,true);
         }));
@@ -150,7 +183,7 @@ internal sealed class TranscriptPanel : Border {
         var next=TranscriptPresentation.Segments(state,Slot);
         string nextIdentity=state.Sources.GetValueOrDefault(Slot)?.Source.Identity??"";
         bool resetView=identity!=nextIdentity||segments.Length>0&&next.Length==0;
-        if(resetView){identity=nextIdentity;lastAnchor=pendingAnchor=null;follow=new();pending=false;readerNavigating=thumbDragging=false;navigationTicket++;Text.Document.PagePadding=new(0);Text.ScrollToHome();}
+        if(resetView){identity=nextIdentity;lastAnchor=pendingAnchor=null;follow=new();pending=false;readerNavigating=readerSelecting=thumbDragging=false;navigationTicket++;Text.Document.PagePadding=new(0);Text.ScrollToHome();}
         bool fontChanged=Text.FontSize!=size;
         bool changed=!segments.SequenceEqual(next)||fontChanged||next.Length==0&&lastSetup!=setup;
         bool geometryChanged=fontChanged||!segments.Select(s=>(s.Key,s.Text)).SequenceEqual(next.Select(s=>(s.Key,s.Text)))||next.Length==0&&lastSetup!=setup;

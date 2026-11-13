@@ -35,6 +35,8 @@ Finalized captions remain during silence and pauses. Each source retains up to
 text is unfinished recognition kept for reading, not a verified final. Scroll
 up to reread; returning near the bottom resumes follow. Resizing changes wrapping
 and visible lines, never the retention budget. Clear history is shared by all clients.
+Clear removes displayed history; it does not stop recognition already running.
+A fresh recognition result can therefore appear after Clear.
 Controls show recent audio signal levels; very quiet speech may need higher
 application playback volume. Rayme does not change your Windows device settings.
 

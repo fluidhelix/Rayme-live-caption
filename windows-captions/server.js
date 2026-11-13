@@ -26,6 +26,7 @@ async function createUI({ port = 8090, onSelect, onRefresh, onConfigure, onPause
     wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws));
   });
   function publish(event) {
+    event=historyPolicy.normalize(event);
     const source=event.source,slot=source?.id||'legacy';
     if(source){
       const epoch=state.epochs[slot];

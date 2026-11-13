@@ -3,10 +3,11 @@ namespace Rayme.Overlay;
 // Mirrors history-policy.js. Count, UTF-16 and conservative encoded-byte limits
 // apply independently to each source, including retained unfinished recognition.
 public static class HistoryPolicy {
-    public const int Segments=200,Characters=65536,Bytes=131072,TextLimit=4000;
-    public static string Limit(string text){int end=Math.Min(text.Length,TextLimit);if(end<text.Length&&char.IsHighSurrogate(text[end-1])&&char.IsLowSurrogate(text[end]))end--;return text[..end];}
+    public const int Segments=200,Characters=65536,Bytes=131072,TextLimit=4000,SourceNameLimit=200;
+    public static string Limit(string text,int limit=TextLimit){int end=Math.Min(text.Length,limit);if(end<text.Length&&char.IsHighSurrogate(text[end-1])&&char.IsLowSurrogate(text[end]))end--;return text[..end];}
+    public static string SourceName(string name)=>Limit(name,SourceNameLimit);
     static int EncodedBytes(string text){int bytes=0;foreach(char c in text)bytes+=c<32||char.IsSurrogate(c)?6:c=='"'||c=='\\'?2:c<128?1:c<2048?2:3;return bytes;}
-    public static int Cost(Caption c)=>256+EncodedBytes(c.Text)+EncodedBytes(c.Source.Name)+EncodedBytes(c.Source.Identity);
+    public static int Cost(Caption c)=>256+EncodedBytes(c.Text)+EncodedBytes(SourceName(c.Source.Name))+EncodedBytes(c.Source.Identity);
     public static Caption[] Trim(IEnumerable<Caption> history){
         var budgets=new Dictionary<string,(int Count,int Chars,int Bytes,bool Full)>();var kept=new List<Caption>();
         foreach(var c in history.OrderBy(c=>c.CapturedAt).Reverse()){

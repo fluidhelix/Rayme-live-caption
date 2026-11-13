@@ -34,11 +34,11 @@ public sealed class CaptionState {
     static Source? ReadSource(JsonElement e) {
         if (!e.TryGetProperty("source", out var s) || s.ValueKind != JsonValueKind.Object) return null;
         var id = Str(s, "id", 16);
-        return id is "a" or "b" or "device" ? new(id, Num(s, "generation"), Str(s, "name", 200), Str(s, "identity", 512)) : null;
+        return id is "a" or "b" or "device" ? new(id, Num(s, "generation"), HistoryPolicy.SourceName(Str(s, "name", HistoryPolicy.SourceNameLimit+1)), Str(s, "identity", 512)) : null;
     }
     static Caption ReadCaption(JsonElement e) => new(ReadSource(e) ?? new("legacy", 0, "Playback output", "legacy"), Num(e, "id"), Flag(e, "final"), HistoryPolicy.Limit(Str(e, "text",HistoryPolicy.TextLimit+1)), e.TryGetProperty("capturedAt", out var time) && time.TryGetDouble(out double at) && double.IsFinite(at) ? at : 0,Num(e,"revision"),Flag(e,"unfinished"));
     static List<Choice> Choices(JsonElement e, string name) => e.TryGetProperty(name, out var list) && list.ValueKind == JsonValueKind.Array
-        ? list.EnumerateArray().Take(512).Select(x => new Choice(Str(x, "id", 512), Str(x, "name", 200) + (name == "apps" && Num(x, "pid") > 0 ? $" (PID {Num(x, "pid")})" : ""))).ToList() : [];
+        ? list.EnumerateArray().Take(512).Select(x => new Choice(Str(x, "id", 512), HistoryPolicy.SourceName(Str(x, "name", HistoryPolicy.SourceNameLimit+1)) + (name == "apps" && Num(x, "pid") > 0 ? $" (PID {Num(x, "pid")})" : ""))).ToList() : [];
     bool Obsolete(Source s) => Sources.TryGetValue(s.Id,out var active)&&active.Source.Generation==s.Generation&&active.Source.Identity!=s.Identity || generations.GetValueOrDefault(s.Id) > s.Generation || (removed.Contains(s.Id) && generations.GetValueOrDefault(s.Id) >= s.Generation);
     void Track(Source s) {
         if (generations.GetValueOrDefault(s.Id) < s.Generation) {

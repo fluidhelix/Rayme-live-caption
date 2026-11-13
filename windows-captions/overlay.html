@@ -42,11 +42,12 @@ function controls(supported){
  const previous=devices.value;devices.replaceChildren(new Option('Windows default output','default'),...outputs.map(d=>new Option(d.name,d.id)));devices.value=sources.device?.source.identity||previous||deviceDefault;document.getElementById('enable-device').checked=!!sources.device;document.getElementById('pause').textContent=paused?'Resume capture':'Pause capture';
 }
 function handle(e){
+ e=RaymeHistory.normalize(e);
  if(e.type==='snapshot'){
-  entries=RaymeHistory.trim(e.history||[]);partials={};sources=e.sources||{};epochs=e.epochs||Object.fromEntries(Object.entries(sources).map(([id,s])=>[id,{source:s.source,removed:false}]));books.clear();
+  entries=RaymeHistory.trim(e.history||[]);partials={};sources=Object.fromEntries(Object.entries(e.sources||{}).map(([id,s])=>[id,RaymeHistory.normalize(s)]));epochs=e.epochs||Object.fromEntries(Object.entries(sources).map(([id,s])=>[id,{source:s.source,removed:false}]));books.clear();
   for(const [slot,data]of Object.entries(e.segments||{})){const l=book({source:slot==='legacy'?null:{id:slot,generation:data.generation}});l.floor=data.floor;l.finalized=data.finalized;l.latest=data.latest||data.finalized;l.entries=new Map(data.entries.map(v=>[v.id,v]));}
   if(!e.segments)for(const item of entries)if(item.final)book(item).mark(item.id,0,{closed:true,cleared:true,final:true});
-  for(const item of [...Object.values(e.partials||{}),...(e.partial?[e.partial]:[])]){const l=book(item),revision=l.revision(item.id,item.revision),stamp=epochs[item.source?.id];if(stamp&&(stamp.removed||stamp.source.generation!==item.source.generation||stamp.source.identity!==item.source.identity))continue;if(l.allows(item.id,revision,false,true)&&item.text){partials[item.source?.id||'legacy']={...item,revision};l.mark(item.id,revision);}}
+  for(const item of [...Object.values(e.partials||{}),...(e.partial?[e.partial]:[])].map(RaymeHistory.normalize)){const l=book(item),revision=l.revision(item.id,item.revision),stamp=epochs[item.source?.id];if(stamp&&(stamp.removed||stamp.source.generation!==item.source.generation||stamp.source.identity!==item.source.identity))continue;if(l.allows(item.id,revision,false,true)&&item.text){partials[item.source?.id||'legacy']={...item,revision};l.mark(item.id,revision);}}
   apps=e.apps||[];outputs=e.devices;deviceDefault=e.selected||'default';paused=e.paused;statusEl.textContent=e.status;controls(e.processSupported);render();return;
  }
  if(e.source){const slot=e.source.id,stamp=epochs[slot];if(stamp&&(stamp.source.generation>e.source.generation||stamp.source.generation===e.source.generation&&stamp.source.identity!==e.source.identity||stamp.removed&&stamp.source.generation>=e.source.generation))return;

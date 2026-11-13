@@ -18,6 +18,7 @@ if(phase===4){const old=sources.a;ui.publish({type:'source-removed',source:old})
 if(phase===5)retire(sources.a,1,1,false,true);
 if(phase===6)c(sources.a,1,2,true,'New application verified final');
 if(phase===7){for(let id=2;id<=215;id++)c(sources.a,id,id,true,'Retained browser sentence '+id);for(let id=41;id<=255;id++)c(sources.b,id,id,true,'Retained voice sentence '+id);}
+if(phase===8){ui.publish({type:'source-removed',source:sources.a});sources.a={...sources.a,generation:5,name:'界'.repeat(199)+'😀'+'超長😀'.repeat(500)};ui.publish({type:'reset',source:sources.a});for(let id=1;id<=210;id++)c(sources.a,id,id,true,'x'.repeat(400));}
 },onConfigure:(slot,d)=>ui.publish(d?{type:'source-status',source:sources[slot],state:'capturing',message:'Synthetic capture'}:{type:'source-removed',source:sources[slot]}),onPause:paused=>ui.publish({type:'paused',paused})});
 ui.publish({type:'applications',supported:true,apps:[{id:'10:100',pid:10,started:'100',name:'Chrome',kind:'process'},{id:'20:200',pid:20,started:'200',name:'Discord',kind:'process'}]});
 for(const source of Object.values(sources))ui.publish({type:'source-status',source,state:'capturing',message:'Synthetic capture'});
@@ -112,6 +113,15 @@ try:
         expect(page.locator('#history p[data-source="b"]')).to_have_count(200)
         page.reload()
         expect(page.locator('#history p')).to_have_count(400)
+        page.locator('#refresh').click()
+        expect(page.locator('#history p[data-source="a"]')).to_have_count(104)
+        live_ids = page.evaluate('entries.filter(c=>c.source.id==="a").map(c=>c.id)')
+        assert page.evaluate('sources.a.source.name') == '界' * 199
+        assert page.evaluate('sources.a.source.identity') == '11:101'
+        page.reload()
+        expect(page.locator('#history p[data-source="a"]')).to_have_count(104)
+        assert page.evaluate('entries.filter(c=>c.source.id==="a").map(c=>c.id)') == live_ids
+        assert page.evaluate('sources.a.source.name') == '界' * 199
         assert not errors, errors
         browser.close()
     print('PASS browser: independent 200-segment retention, unfinished/final replacement, reconnect, font, pause/resume, shared clear, source isolation, retirement revisions and persistent failure/recovery')

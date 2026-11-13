@@ -1,22 +1,45 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
+using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 
 namespace Rayme.Overlay;
 internal sealed partial class OverlayWindow {
+    static async Task UiUntil(Func<bool> ready,string why){
+        var deadline=Stopwatch.StartNew();int stable=0;
+        while(deadline.ElapsedMilliseconds<4000){
+            await System.Windows.Threading.Dispatcher.Yield(DispatcherPriority.ContextIdle);
+            if(ready()){if(++stable==2)return;}else stable=0;
+            await Task.Delay(10);
+        }throw new TimeoutException("Native UI condition: "+why);
+    }
+    static Task AwaitPanels(params TranscriptPanel[] views)=>UiUntil(()=>views.All(p=>!p.IsVisible||p.IsLoaded&&p.Text.IsMeasureValid&&p.Text.IsArrangeValid&&!p.ScrollWorkPending),"transcript layout and reader/restore work settled");
+    static void RoutedWheel(TranscriptPanel panel,int delta){
+        var e=new MouseWheelEventArgs(Mouse.PrimaryDevice,Environment.TickCount,delta){RoutedEvent=Mouse.PreviewMouseWheelEvent};
+        panel.Scroll.RaiseEvent(e);if(!e.Handled){e.RoutedEvent=Mouse.MouseWheelEvent;panel.Scroll.RaiseEvent(e);}
+    }
+    static void RoutedKey(TranscriptPanel panel,Key key){
+        var source=PresentationSource.FromVisual(panel.Text)??throw new Exception("Native input source unavailable");
+        var e=new KeyEventArgs(Keyboard.PrimaryDevice,source,Environment.TickCount,key){RoutedEvent=Keyboard.PreviewKeyDownEvent};
+        panel.Text.RaiseEvent(e);if(!e.Handled){e.RoutedEvent=Keyboard.KeyDownEvent;panel.Text.RaiseEvent(e);}
+    }
     async Task ApprovedDesignSmoke(string output){
         UiCheck(((SolidColorBrush)surface.Background).Color is {R:0,G:0,B:0},"Overlay paints pure black with the existing background alpha");
         UiCheck(fontControl!.Minimum==16&&fontControl.Maximum==60&&fontControl.Value==prefs.FontSize,"Text-size slider retains 16–60 range and its live preference");
         UiCheck(panels["a"].SourceLabel==state.Sources["a"].Source.Name&&panels["a"].BorderThickness.Left==0,"Source title uses the actual name and no colored left bar");
         int commands=smokeCommands.Count;
         var combinedMark=panels["a"].ReadingMark();bool wasFollowing=panels["a"].Following;
-        Detach();await Task.Delay(100);UpdateLayout();
+        panels["a"].PrepareMove();UiCheck(panels["a"].ScrollWorkPending,"Detach fixture has an actual queued scroll restoration");
+        Detach();await UiUntil(()=>detached.Count==2&&detached.Values.All(w=>w.IsLoaded),"detached peers loaded");await AwaitPanels(panels["a"],panels["b"]);UpdateLayout();
         UiCheck(layout.Detached&&detached.Count==2&&!IsVisible&&detached.Values.All(w=>w.IsVisible),"Explicit detach shows two peer caption windows and hides only the combined host");
         UiCheck(smokeCommands.Count==commands,"Detaching sends no capture, model or backend command");
         UiCheck(detached["a"].Body.Children.Contains(panels["a"])&&detached["b"].Body.Children.Contains(panels["b"]),"Detached views reuse the same continuous transcript and scroll objects");
@@ -24,8 +47,9 @@ internal sealed partial class OverlayWindow {
         ToggleSourceLock("a");UiCheck(detached["a"].ResizeMode==ResizeMode.NoResize&&detached["b"].ResizeMode!=ResizeMode.NoResize,"Detached locks affect only their own window");
         OpenSourceControls(detached["a"]);await Task.Delay(40);UiCheck(controls!.IsVisible&&controls.Owner==detached["a"],"Settings remains accessible and correctly owned from a locked detached window");
         Capture(detached["a"],Path.Combine(output,"detached-a.png"));Capture(detached["b"],Path.Combine(output,"detached-b.png"));
-        detached["a"].Width=520;await Task.Delay(50);UiCheck(detached["b"].Width!=520,"Detached window dimensions are independent");
-        Reattach();await Task.Delay(80);UiCheck(!layout.Detached&&detached.Count==0&&IsVisible&&captions.Children.Count==2,"Reattach restores the existing combined host and both panels");
+        detached["a"].Width=520;await AwaitPanels(panels["a"],panels["b"]);UiCheck(detached["b"].Width!=520,"Detached window dimensions are independent");
+        panels["a"].PrepareMove();UiCheck(panels["a"].ScrollWorkPending,"Reattach fixture has an actual queued scroll restoration");
+        Reattach();await AwaitPanels(panels["a"],panels["b"]);UiCheck(!layout.Detached&&detached.Count==0&&IsVisible&&captions.Children.Count==2,"Reattach restores the existing combined host and both panels");
         UiCheck(panels["a"].Following==wasFollowing&&(wasFollowing||combinedMark is {} rm&&Math.Abs((panels["a"].MarkY(rm.Key,rm.Index)??double.MaxValue)-rm.Y)<1),"Reattachment retains the combined reader's surviving word");
         // A temporary source removal must not destroy the main smoke history.
         var snapshot=state.Sources["b"];state.Sources.Remove("b");Render();UiCheck(captions.Children.Count==1&&!toolbar.Layout.IsEnabled,"A alone expands and Detach is disabled");state.Sources["b"]=snapshot;Render();
@@ -45,6 +69,68 @@ internal sealed partial class OverlayWindow {
         UiCheck(Rayme.CharcoalDialog.Show("Synthetic dialog fixture.","Rayme · Theme probe",0x10)==1,"Charcoal startup/error prompt preserves OK behavior");
         await CaptionStabilitySmoke(output);
         await ReadingViewportSmoke(output);
+        await AuditInputSmoke(output);
+    }
+    async Task AuditInputSmoke(string output){
+        var sample=new CaptionState();long revision=1;
+        var source=new{id="a",generation=1,name="Synthetic input",identity="audit-input"};
+        string Words(int n)=>string.Join(" ",Enumerable.Repeat("synthetic recognition words",n));
+        void Caption(long id,string text,bool final)=>sample.Apply(JsonSerializer.Serialize(new{type="caption",source,id,text,final,revision=revision++,capturedAt=id}));
+        for(int id=1;id<=12;id++)Caption(id,"Verified stable sentence "+id+" "+Words(3),true);
+        Caption(13,Words(3),false);
+        var panel=new TranscriptPanel("a",true);var window=new Window{Width=450,Height=300,Content=panel,Owner=this,ShowInTaskbar=false};window.Show();
+        void Paint(double size=22)=>panel.Update(sample,size,"#80DFFF",false);
+        Paint();await AwaitPanels(panel);
+        var bar=Descendants<ScrollBar>(panel.Text).Single(s=>s.Orientation==Orientation.Vertical);
+        async Task Bottom(){ScrollBar.ScrollToBottomCommand.Execute(null,bar);await UiUntil(()=>!panel.ScrollWorkPending&&panel.Following&&panel.LatestVisible(),"routed scrollbar return to bottom");}
+        var commands=new[]{(EditingCommands.SelectLeftByCharacter,"Shift+Left"),(EditingCommands.SelectRightByCharacter,"Shift+Right"),(EditingCommands.SelectLeftByWord,"Ctrl+Shift+Left"),(EditingCommands.SelectRightByWord,"Ctrl+Shift+Right"),(ApplicationCommands.SelectAll,"Ctrl+A / menu Select all")};
+        foreach(var (command,name) in commands){
+            await Bottom();
+            // Place the caret in stable retained text; the real editor command
+            // performs selection and traverses the production routed handler.
+            var first=panel.Text.Document.Blocks.OfType<Paragraph>().Single().Inlines.OfType<Run>().First();
+            var caret=command==ApplicationCommands.SelectAll?panel.Text.Document.ContentEnd:first.ContentStart.GetPositionAtOffset(12)!;
+            panel.Text.Selection.Select(caret,caret);UiCheck(command.CanExecute(null,panel.Text),"Native selection command is available: "+name);
+            command.Execute(null,panel.Text);await UiUntil(()=>!panel.ScrollWorkPending&&!panel.Text.Selection.IsEmpty&&!panel.Following,"routed selection "+name);
+            string selected=panel.Text.Selection.Text;var mark=panel.ReadingMark();
+            Caption(13,"Revised earlier words "+Words(35),false);Paint();await AwaitPanels(panel);
+            UiCheck(!panel.Following&&!panel.Text.Selection.IsEmpty,"Same-source revision cannot rearm follow during "+name);
+            if(command!=ApplicationCommands.SelectAll){
+                UiCheck(panel.Text.Selection.Text==selected,"Same-source revision preserves selected retained text for "+name);
+                UiCheck(mark is {} m&&Math.Abs((panel.MarkY(m.Key,m.Index)??double.MaxValue)-m.Y)<1,"Same-source revision preserves the selected reading viewport for "+name);
+            }else UiCheck(panel.Text.Selection.Text.Contains("Verified stable sentence"),"Select all retains earlier selected conversation across a same-source revision");
+        }
+        await Bottom();double before=panel.Text.VerticalOffset;RoutedWheel(panel,1200);
+        await UiUntil(()=>!panel.ScrollWorkPending&&!panel.Following&&panel.Text.VerticalOffset<before-1,"actual routed wheel scrolls older text");
+        var wheelMark=panel.ReadingMark()??throw new Exception("Missing wheel reading anchor");Caption(13,"A new correction "+Words(45),false);Paint();await AwaitPanels(panel);
+        UiCheck(!panel.Following&&Math.Abs((panel.MarkY(wheelMark.Key,wheelMark.Index)??double.MaxValue)-wheelMark.Y)<1,"Routed wheel reader position survives same-source recognition");
+        await Bottom();before=panel.Text.VerticalOffset;ScrollBar.PageUpCommand.Execute(null,bar);
+        await UiUntil(()=>!panel.ScrollWorkPending&&!panel.Following&&panel.Text.VerticalOffset<before-1,"actual scrollbar PageUp interaction");
+        UiCheck(!panel.Following,"Scrollbar commands produce reader intent without a blanket ScrollChanged heuristic");
+        await Bottom();before=panel.Text.VerticalOffset;var thumb=Descendants<Thumb>(bar).Single();
+        thumb.RaiseEvent(new DragStartedEventArgs(0,0){RoutedEvent=Thumb.DragStartedEvent});
+        thumb.RaiseEvent(new DragDeltaEventArgs(0,-120){RoutedEvent=Thumb.DragDeltaEvent});
+        thumb.RaiseEvent(new DragCompletedEventArgs(0,-120,false){RoutedEvent=Thumb.DragCompletedEvent});
+        await UiUntil(()=>!panel.ScrollWorkPending&&!panel.Following&&panel.Text.VerticalOffset<before-1,"routed scrollbar thumb drag lifecycle");
+        UiCheck(!panel.Following,"Handled scrollbar thumb events retain reader intent through drag completion");
+        await Bottom();panel.Text.Focus();before=panel.Text.VerticalOffset;RoutedKey(panel,Key.PageUp);
+        await UiUntil(()=>!panel.ScrollWorkPending&&!panel.Following&&panel.Text.VerticalOffset<before-1,"routed keyboard PageUp");
+        UiCheck(!panel.Following,"Native routed keyboard navigation leaves live-follow mode");
+        await Bottom();Caption(13,"Queued restoration "+Words(55),false);Paint();UiCheck(panel.ScrollWorkPending,"Race fixture starts with actual queued restoration");
+        var stableRun=panel.Text.Document.Blocks.OfType<Paragraph>().Single().Inlines.OfType<Run>().First();var position=stableRun.ContentStart.GetPositionAtOffset(18)!;panel.Text.Selection.Select(position,position);
+        EditingCommands.SelectToDocumentStart.Execute(null,panel.Text);string raceSelection=panel.Text.Selection.Text;
+        Caption(13,"Another revision before input settles "+Words(65),false);Paint();window.Width=700;window.Height=420;
+        await AwaitPanels(panel);
+        UiCheck(raceSelection.Length>0&&panel.Text.Selection.Text==raceSelection&&!panel.Following&&!panel.LatestVisible(),"Input plus revision and resize invalidates a queued follow before dispatcher callbacks settle");
+        var shrinkMark=panel.ReadingMark()??throw new Exception("Missing shrink reading anchor");Caption(13,"Correct final.",true);Paint();await AwaitPanels(panel);
+        UiCheck(!panel.Following&&Math.Abs((panel.MarkY(shrinkMark.Key,shrinkMark.Index)??double.MaxValue)-shrinkMark.Y)<1,"Large multi-line partial-to-final shrink preserves a surviving reading word");
+        foreach(var geometry in new[]{(380d,260d,30d),(720d,540d,22d),(400d,280d,34d),(700d,520d,22d)}){
+            var mark=panel.ReadingMark()??throw new Exception("Missing reflow reading anchor");window.Width=geometry.Item1;window.Height=geometry.Item2;Paint(geometry.Item3);await AwaitPanels(panel);
+            UiCheck(!panel.Following&&Math.Abs((panel.MarkY(mark.Key,mark.Index)??double.MaxValue)-mark.Y)<1,"Condition-settled resize/font cycle preserves routed-selection reader position");
+        }
+        var removed=panel.ReadingMark()??throw new Exception("Missing removed-anchor fixture");for(int id=14;id<=240;id++)Caption(id,"Retained replacement "+id+" "+Words(2),true);Paint();await AwaitPanels(panel);
+        UiCheck(panel.MarkY(removed.Key,removed.Index)==null&&!panel.Following&&double.IsFinite(panel.Text.VerticalOffset)&&panel.Text.VerticalOffset<=panel.ScrollableHeight+1,"Pruning the selected anchor recovers to retained text without forcing live follow");
+        File.WriteAllText(Path.Combine(output,"caption-input-geometry.json"),JsonSerializer.Serialize(panel.Geometry(),new JsonSerializerOptions{WriteIndented=true}));window.Close();
     }
     async Task ReadingViewportSmoke(string output){
         var sample=new CaptionState();
@@ -55,50 +141,50 @@ internal sealed partial class OverlayWindow {
         void Paint(double size=22){a.Update(sample,size,"#80DFFF",false);b.Update(sample,size,"#FFD68A",false);}
         string Words(int count)=>string.Join(" ",Enumerable.Repeat("synthetic readable words",count));
         for(int i=1;i<=12;i++)Caption("a",i,"Retained synthetic sentence "+i+" "+Words(3),true,1);
-        Caption("b",1,Words(15),false,1);Paint();await Task.Delay(80);
+        Caption("b",1,Words(15),false,1);Paint();await AwaitPanels(a,b);
         for(int i=1;i<=7;i++){
             string prefix=i<=3?"First draft":"Revised earlier words";
-            Caption("a",13,prefix+" "+Words(i*5),false,i);Paint();await Task.Delay(60);
+            Caption("a",13,prefix+" "+Words(i*5),false,i);Paint();await AwaitPanels(a,b);
             UiCheck(a.Following&&a.LatestVisible(),"Continuous speech follows through prefix and non-prefix revision "+i);
         }
-        Caption("a",13,"Accurately corrected shorter sentence.",false,8);Paint();await Task.Delay(70);UiCheck(a.Following&&a.LatestVisible(),"A shorter correction keeps its latest words visible");
-        Caption("a",13,"Accurately corrected final sentence.",true,9);Paint();await Task.Delay(70);UiCheck(a.Following&&a.LatestVisible(),"Partial-to-final correction keeps the latest line visible");
-        double silence=a.Text.VerticalOffset;string retained=a.PlainText;await Task.Delay(100);Paint();await Task.Delay(50);
+        Caption("a",13,"Accurately corrected shorter sentence.",false,8);Paint();await AwaitPanels(a,b);UiCheck(a.Following&&a.LatestVisible(),"A shorter correction keeps its latest words visible");
+        Caption("a",13,"Accurately corrected final sentence.",true,9);Paint();await AwaitPanels(a,b);UiCheck(a.Following&&a.LatestVisible(),"Partial-to-final correction keeps the latest line visible");
+        double silence=a.Text.VerticalOffset;string retained=a.PlainText;await Task.Delay(100);Paint();await AwaitPanels(a,b);
         UiCheck(a.Text.VerticalOffset==silence&&a.PlainText==retained,"Silence requires no new event or scroll adjustment to retain native text");
-        a.ReaderNavigating();a.Scroll.ScrollToVerticalOffset(a.ScrollableHeight*.35);await Task.Delay(80);var mark=a.ReadingMark()??throw new Exception("Missing rereading anchor");
+        a.ReaderNavigating();a.Scroll.ScrollToVerticalOffset(a.ScrollableHeight*.35);await AwaitPanels(a,b);var mark=a.ReadingMark()??throw new Exception("Missing rereading anchor");
         UiCheck(!a.Following&&b.Following,"Manual rereading is independent for two native panels");
-        Caption("a",14,"New speech "+Words(50),false,1);Caption("b",1,"Corrected other-source speech "+Words(60),false,2);Paint();await Task.Delay(80);
+        Caption("a",14,"New speech "+Words(50),false,1);Caption("b",1,"Corrected other-source speech "+Words(60),false,2);Paint();await AwaitPanels(a,b);
         UiCheck(!a.Following&&Math.Abs((a.MarkY(mark.Key,mark.Index)??double.MaxValue)-mark.Y)<1&&b.LatestVisible(),"A stays on its reading word while B independently follows a non-prefix correction");
         var selectionStart=a.Text.GetPositionFromPoint(new Point(4,4),true)??throw new Exception("Missing selectable native reading word");
         a.Text.Selection.Select(selectionStart,selectionStart.GetPositionAtOffset(12)??selectionStart);string selection=a.Text.Selection.Text;
-        Caption("b",1,"Another revision "+Words(65),false,3);Paint();await Task.Delay(60);
+        Caption("b",1,"Another revision "+Words(65),false,3);Paint();await AwaitPanels(a,b);
         UiCheck(selection.Length>0&&a.Text.Selection.Text==selection&&!a.Following,"Other-source updates preserve selected reading text without stealing reader follow intent");
-        mark=a.ReadingMark()??throw new Exception("Missing hidden reader fixture");wa.Hide();Caption("a",14,"Revised while hidden "+Words(55),false,2);Paint();await Task.Delay(60);wa.Show();await Task.Delay(80);
+        mark=a.ReadingMark()??throw new Exception("Missing hidden reader fixture");wa.Hide();Caption("a",14,"Revised while hidden "+Words(55),false,2);Paint();await AwaitPanels(a,b);wa.Show();await AwaitPanels(a,b);
         UiCheck(!a.Following&&Math.Abs((a.MarkY(mark.Key,mark.Index)??double.MaxValue)-mark.Y)<1,"Hide/Show keeps a rereading anchor while recognition continues");
-        a.ReaderNavigating();a.Scroll.ScrollToEnd();await Task.Delay(80);Caption("a",14,"Rewritten new speech "+Words(65),false,3);Paint();await Task.Delay(80);
+        a.ReaderNavigating();a.Scroll.ScrollToEnd();await AwaitPanels(a,b);Caption("a",14,"Rewritten new speech "+Words(65),false,3);Paint();await AwaitPanels(a,b);
         UiCheck(a.Following&&a.LatestVisible(),"Manually returning to the bottom resumes native follow within the same utterance");
-        wa.Hide();Caption("a",14,"Following while hidden "+Words(70),false,4);Paint();await Task.Delay(60);wa.Show();await Task.Delay(80);UiCheck(a.Following&&a.LatestVisible(),"Hide/Show resumes the live tail without a new speech event");
+        wa.Hide();Caption("a",14,"Following while hidden "+Words(70),false,4);Paint();await AwaitPanels(a,b);wa.Show();await AwaitPanels(a,b);UiCheck(a.Following&&a.LatestVisible(),"Hide/Show resumes the live tail without a new speech event");
         Caption("a",14,"Final synthetic speech",true,5);
-        for(int i=15;i<=215;i++)Caption("a",i,"Retained synthetic sentence "+i+" "+Words(2),true,1);Paint();await Task.Delay(90);
+        for(int i=15;i<=215;i++)Caption("a",i,"Retained synthetic sentence "+i+" "+Words(2),true,1);Paint();await AwaitPanels(a,b);
         UiCheck(sample.History.Count(c=>c.Source.Id=="a")==200&&a.LatestVisible(),"History pruning at the bottom preserves the independent 200-segment budget and latest line");
-        a.ReaderNavigating();a.Scroll.ScrollToVerticalOffset(a.ScrollableHeight*.5);await Task.Delay(80);mark=a.ReadingMark()??throw new Exception("Missing pruning anchor");
-        for(int i=216;i<=222;i++)Caption("a",i,"Retained synthetic sentence "+i+" "+Words(2),true,1);Paint();await Task.Delay(90);
+        a.ReaderNavigating();a.Scroll.ScrollToVerticalOffset(a.ScrollableHeight*.5);await AwaitPanels(a,b);mark=a.ReadingMark()??throw new Exception("Missing pruning anchor");
+        for(int i=216;i<=222;i++)Caption("a",i,"Retained synthetic sentence "+i+" "+Words(2),true,1);Paint();await AwaitPanels(a,b);
         UiCheck(!a.Following&&Math.Abs((a.MarkY(mark.Key,mark.Index)??double.MaxValue)-mark.Y)<1,"Pruning earlier history preserves a surviving native reading word");
         int count=sample.History.Count;string all=a.PlainText;
         foreach(var size in new[]{(700d,520d),(380d,260d),(720d,540d),(400d,280d)}){
-            mark=a.ReadingMark()??throw new Exception("Missing resize anchor");wa.Width=size.Item1;wa.Height=size.Item2;await Task.Delay(80);
+            mark=a.ReadingMark()??throw new Exception("Missing resize anchor");wa.Width=size.Item1;wa.Height=size.Item2;await AwaitPanels(a,b);
             UiCheck(!a.Following&&Math.Abs((a.MarkY(mark.Key,mark.Index)??double.MaxValue)-mark.Y)<1,"Small/large native reflow retains the reader's word and follow intent");
             UiCheck(a.PlainText==all&&sample.History.Count==count,"Window resizing never deletes retained caption history");
         }
-        mark=a.ReadingMark()??throw new Exception("Missing font anchor");Paint(30);await Task.Delay(90);UiCheck(!a.Following&&Math.Abs((a.MarkY(mark.Key,mark.Index)??double.MaxValue)-mark.Y)<1,"Font-size reflow preserves a surviving native reading anchor");
-        a.ReaderNavigating();a.Scroll.ScrollToEnd();await Task.Delay(80);
-        foreach(var size in new[]{(700d,520d),(380d,260d),(720d,540d)}){wa.Width=size.Item1;wa.Height=size.Item2;await Task.Delay(80);UiCheck(a.Following&&a.LatestVisible()&&sample.History.Count==count,"Following resize reveals retained older text without losing newest speech or history");}
-        Caption("a",223,"Unfinished synthetic recognition "+Words(25),false,1);Paint(30);await Task.Delay(80);double offset=a.Text.VerticalOffset;string draft=a.PlainText;
-        sample.Apply("""{"type":"segment-retired","source":{"id":"a","generation":1,"name":"Synthetic a","identity":"reading-a"},"id":223,"revision":1,"terminal":false,"retain":true}""");Paint(30);await Task.Delay(80);
+        mark=a.ReadingMark()??throw new Exception("Missing font anchor");Paint(30);await AwaitPanels(a,b);UiCheck(!a.Following&&Math.Abs((a.MarkY(mark.Key,mark.Index)??double.MaxValue)-mark.Y)<1,"Font-size reflow preserves a surviving native reading anchor");
+        a.ReaderNavigating();a.Scroll.ScrollToEnd();await AwaitPanels(a,b);
+        foreach(var size in new[]{(700d,520d),(380d,260d),(720d,540d)}){wa.Width=size.Item1;wa.Height=size.Item2;await AwaitPanels(a,b);UiCheck(a.Following&&a.LatestVisible()&&sample.History.Count==count,"Following resize reveals retained older text without losing newest speech or history");}
+        Caption("a",223,"Unfinished synthetic recognition "+Words(25),false,1);Paint(30);await AwaitPanels(a,b);double offset=a.Text.VerticalOffset;string draft=a.PlainText;
+        sample.Apply("""{"type":"segment-retired","source":{"id":"a","generation":1,"name":"Synthetic a","identity":"reading-a"},"id":223,"revision":1,"terminal":false,"retain":true}""");Paint(30);await AwaitPanels(a,b);
         UiCheck(!a.IsLive&&a.PlainText==draft&&a.Text.VerticalOffset==offset,"Unfinished expiration changes classification without erasing text or scrolling");
         UiCheck(a.Text.Document.PagePadding.Bottom<=a.Text.ViewportHeight,"Anchor preservation never allocates multiple blank viewports");
-        a.ReaderNavigating();a.Scroll.ScrollToVerticalOffset(a.ScrollableHeight*.25);await Task.Delay(80);mark=a.ReadingMark()??throw new Exception("Missing removed-anchor fixture");
-        for(int i=224;i<=450;i++)Caption("a",i,"New retained synthetic sentence "+i+" "+Words(2),true,1);Paint(30);await Task.Delay(90);
+        a.ReaderNavigating();a.Scroll.ScrollToVerticalOffset(a.ScrollableHeight*.25);await AwaitPanels(a,b);mark=a.ReadingMark()??throw new Exception("Missing removed-anchor fixture");
+        for(int i=224;i<=450;i++)Caption("a",i,"New retained synthetic sentence "+i+" "+Words(2),true,1);Paint(30);await AwaitPanels(a,b);
         UiCheck(a.MarkY(mark.Key,mark.Index)==null&&!a.Following&&double.IsFinite(a.Text.VerticalOffset)&&a.Text.VerticalOffset<=a.ScrollableHeight+1,"Pruning the reading word recovers to retained text without reviving deleted segments or forcing live follow");
         File.WriteAllText(Path.Combine(output,"caption-reading-geometry.json"),JsonSerializer.Serialize(new{a=a.Geometry(),b=b.Geometry()},new JsonSerializerOptions{WriteIndented=true}));
         wa.Close();wb.Close();
@@ -118,15 +204,15 @@ internal sealed partial class OverlayWindow {
         for(int i=1;i<=12;i++)Event(i,true,"Readable earlier conversation remains available while the current sentence is corrected.");
         const string provisional="These are the words I can already read while you finish the thought. More provisional words may be corrected at the end.";
         Event(13,false,provisional);
-        var panel=new TranscriptPanel("a",true);var window=new Window{Width=450,Height=300,Content=panel,Owner=this,ShowInTaskbar=false};window.Show();panel.Update(sample,22,"#80DFFF",false);await Task.Delay(100);
-        panel.ReaderNavigating();panel.Scroll.ScrollToVerticalOffset(Math.Max(0,panel.Scroll.ScrollableHeight-20));await Task.Delay(70);
+        var panel=new TranscriptPanel("a",true);var window=new Window{Width=450,Height=300,Content=panel,Owner=this,ShowInTaskbar=false};window.Show();panel.Update(sample,22,"#80DFFF",false);await AwaitPanels(panel);
+        panel.ReaderNavigating();panel.Scroll.ScrollToVerticalOffset(Math.Max(0,panel.Scroll.ScrollableHeight-20));await AwaitPanels(panel);
         var mark=panel.ReadingMark()??throw new InvalidOperationException("Native reading anchor unavailable");double width=panel.Text.ViewportWidth,height=panel.Text.ViewportHeight;
         UiCheck(mark.Key!="a:1:13","Correction probe anchors a surviving finalized word");
-        Event(13,true,"These are the words I can already read.",2);panel.Update(sample,22,"#80DFFF",false);await Task.Delay(100);
+        Event(13,true,"These are the words I can already read.",2);panel.Update(sample,22,"#80DFFF",false);await AwaitPanels(panel);
         var finalY=panel.MarkY(mark.Key,mark.Index);
         UiCheck(finalY.HasValue&&Math.Abs(finalY.Value-mark.Y)<1,"Partial-to-final shrink preserves the native reading word's screen position");
         UiCheck(panel.Text.ViewportWidth==width&&panel.Text.ViewportHeight==height,"Finalization and LIVE keep native wrapping width and viewport geometry stable");
-        var stableOffset=panel.Text.VerticalOffset;panel.Update(sample,22,"#80DFFF",false);await Task.Delay(60);UiCheck(Math.Abs(panel.Text.VerticalOffset-stableOffset)<1,"Silence/status-only update does not scroll the native transcript");
+        var stableOffset=panel.Text.VerticalOffset;panel.Update(sample,22,"#80DFFF",false);await AwaitPanels(panel);UiCheck(Math.Abs(panel.Text.VerticalOffset-stableOffset)<1,"Silence/status-only update does not scroll the native transcript");
         panel.Text.SelectAll();UiCheck(!panel.Text.Selection.IsEmpty,"Native caption text supports normal selection and copy");
         File.WriteAllText(Path.Combine(output,"caption-geometry.json"),JsonSerializer.Serialize(new{legacyBefore,legacyAfter,current=panel.Geometry()},new JsonSerializerOptions{WriteIndented=true}));
         window.Close();
