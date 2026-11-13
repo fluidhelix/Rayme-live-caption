@@ -148,6 +148,7 @@ static class Program {
         follow.ReaderMoved(500,500);Check(follow.NeedsReveal(220,250,200),"Manual return to the bottom resumes following");
         follow.ReaderMoved(500,500,selecting:true);Check(!follow.NeedsReveal(220,250,200),"An active user selection prevents near-bottom follow from rearming");
         follow.ReaderMoved(500,500);Check(follow.Following,"Explicit non-selection navigation back to the bottom resumes following");
+        Check(follow.NeedsReveal(-3.8166666667,25.4466666667,209),"A latest line clipped by a committed anchor scroll still requires reveal");
         Check(!follow.NeedsReveal(double.NaN,250,200)&&!follow.NeedsReveal(0,0,0),"Unmeasured layout cannot request a spurious scroll");
     }
     static void UsabilityTests(){

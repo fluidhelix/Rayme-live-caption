@@ -175,6 +175,9 @@ internal sealed class TranscriptPanel : Border {
         // released on live growth, reader return to bottom and following reflow.
         double cushion=pendingAnchor==null?0:Math.Clamp(target+Text.ViewportHeight-natural,0,Text.ViewportHeight);
         Text.Document.PagePadding=new Thickness(0,0,0,cushion);Text.UpdateLayout();Text.ScrollToVerticalOffset(Math.Min(target,ScrollableHeight));
+        // WPF queues the offset change. Measure the latest line only after that
+        // request is applied; pre-scroll glyph bounds can hide a clipped tail.
+        Text.UpdateLayout();Trace("anchor-applied");
     }
     internal void PrepareMove(){lastAnchor=Capture()??lastAnchor;QueueRestore(lastAnchor,Text.VerticalOffset);}
     internal void Interactions(bool locked){Cursor=locked?Cursors.Arrow:Cursors.SizeAll;Text.Cursor=Cursors.IBeam;}
