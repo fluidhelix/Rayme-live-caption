@@ -6,6 +6,7 @@ const path=require('node:path');
 const os=require('node:os');
 const {identity,seal,verify,inputFiles}=require('../distribution/runtime-bundle');
 const findRuntime=require('../distribution/find-runtime.cjs');
+const {resolveReference}=require('../distribution/runtime-reference');
 const tools={cl:'19.44',link:'14.44',lib:'14.44',rc:'10.0.26100',mt:'10.0.26100',cmake:'cmake version 4.0',ninja:'1.12',windowsSdk:'10.0.26100.0',vcTools:'14.44',visualStudio:'17.14',node:'v22.23.5',ambientFlagsSha256:'0'.repeat(64)};
 function fixture(){const root=fs.mkdtempSync(path.join(os.tmpdir(),'Rayme runtime unit é ')),repo=path.join(root,'repo'),bundle=path.join(root,'bundle');for(const file of [...inputFiles,'distribution/assets.json']){fs.mkdirSync(path.dirname(path.join(repo,file)),{recursive:true});fs.copyFileSync(path.join(__dirname,'..',file),path.join(repo,file));}return{root,repo,bundle,close:()=>fs.rmSync(root,{recursive:true,force:true})};}
 test('native reuse key ignores application edits and includes compiler/SDK versions and native source inputs',async()=>{
@@ -42,4 +43,24 @@ test('native runtime reuse accepts verified main producers and historical featur
  assert.equal(await findRuntime({...f,attempts:1}),2);
  const historical=lookupFixture();historical.add(3,{});
  assert.equal(await findRuntime({...historical,attempts:1}),3);
+});
+
+test('verified runtime reference pins every native input and recorded compiler independently of consumer tools',async()=>{
+ const f=fixture();try{
+  const info=await identity(f.repo,tools),reference={key:info.key,verifiedCommit:'a'.repeat(40),verifiedRun:41,toolchain:tools};
+  assert.equal((await resolveReference(f.repo,reference)).key,info.key);
+  await assert.rejects(resolveReference(f.repo,{...reference,toolchain:{...tools,cl:'different'}}),/Native inputs differ/);
+  await assert.rejects(resolveReference(f.repo,{...reference,key:'whisper-win-x64-v1-'+'0'.repeat(64)}),/Native inputs differ/);
+  fs.appendFileSync(path.join(f.repo,inputFiles[0]),'changed');
+  await assert.rejects(resolveReference(f.repo,reference),/Native inputs differ/);
+ }finally{f.close();}
+});
+
+test('checked-in reference reproduces the validated Windows bundle without changing its runtime key',async()=>{
+ const f=fixture();try{
+  // actions/checkout on Windows uses CRLF; upstream license bytes are -text.
+  for(const file of inputFiles.filter(x=>!x.startsWith('distribution/legal/'))){const name=path.join(f.repo,file);fs.writeFileSync(name,fs.readFileSync(name,'utf8').replace(/\r?\n/g,'\r\n'));}
+  const reference=require('../distribution/verified-runtime.json');
+  assert.equal((await resolveReference(f.repo,reference)).key,'whisper-win-x64-v1-2b5c8b65eb992f9cf916f90ff923507b98837591885a2b9ff9aa2f97696df45e');
+ }finally{f.close();}
 });

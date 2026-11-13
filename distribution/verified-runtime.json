@@ -1,0 +1,20 @@
+{
+  "key": "whisper-win-x64-v1-2b5c8b65eb992f9cf916f90ff923507b98837591885a2b9ff9aa2f97696df45e",
+  "verifiedRun": 43313975735,
+  "verifiedCommit": "d7365b23352264d51260951b34cdb21813ded10e",
+  "toolchain": {
+    "ninja": "1.13.2",
+    "node": "v22.23.5",
+    "ambientFlagsSha256": "02f62f762d83d999063abde45fcf83c53c369f02fc01c2b32a1f9529e1bf856b",
+    "vcTools": "14.44.35207",
+    "windowsSdk": "10.0.26100.0",
+    "mt": "10.0.26100.7705",
+    "cmake": "cmake version 3.31.6",
+    "imageVersion": "20261101.353.1",
+    "lib": "14.44.35229.0",
+    "visualStudio": "17.14.37827.9",
+    "cl": "19.44.35229.0",
+    "link": "14.44.35229.0",
+    "rc": "10.0.26100.7705"
+  }
+}

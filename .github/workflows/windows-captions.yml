@@ -23,15 +23,14 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: '22.23.5'
-      - uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
-        with:
-          vsversion: '2022'
-          arch: x64
       - id: identity
-        name: Hash native inputs and actual compiler/SDK/tool versions
+        name: Verify native inputs against the pinned, previously validated runtime identity
         shell: pwsh
         run: |
-          ./distribution/runtime-inputs.ps1 -OutputFile artifacts/native-inputs.json
+          node distribution/runtime-reference.js . artifacts/native-inputs.json
+          if ($LASTEXITCODE -ne 0) { throw 'Verified native runtime reference no longer matches native build inputs' }
+          $key = (Get-Content artifacts/native-inputs.json -Raw | ConvertFrom-Json).key
+          "key=$key" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
           $tools = (Get-Content artifacts/native-inputs.json -Raw | ConvertFrom-Json).inputs.toolchain | ConvertTo-Json -Compress
           "tools=$tools" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
   whisper-runtime:
@@ -54,13 +53,14 @@ jobs:
         with:
           vsversion: '2022'
           arch: x64
-      - name: Verify this runner has the exact expected native toolchain
+      - name: Verify current sources against the exact expected native runtime
         shell: pwsh
         env:
           EXPECTED_RUNTIME_TOOLS: ${{ needs.runtime-inputs.outputs.tools }}
         run: |
           try {
-            ./distribution/runtime-inputs.ps1 -OutputFile artifacts/native-inputs.json
+            node distribution/runtime-reference.js . artifacts/native-inputs.json
+            if ($LASTEXITCODE -ne 0) { throw 'Native runtime source identity no longer matches the verified reference' }
             $identity = Get-Content artifacts/native-inputs.json -Raw | ConvertFrom-Json
             if ($identity.key -cne '${{ needs.runtime-inputs.outputs.key }}') {
               $actualTools = $identity.inputs.toolchain | ConvertTo-Json -Compress
@@ -96,7 +96,11 @@ jobs:
       - name: Compile pinned CPU/CUDA only when no exact verified bundle exists
         if: steps.native-cache.outputs.cache-hit != 'true' && steps.existing.outputs.run_id == ''
         shell: pwsh
-        run: ./distribution/build-whisper.ps1 -OutputDirectory artifacts/whisper-runtime -IdentityFile artifacts/native-inputs.json
+        run: |
+          ./distribution/runtime-inputs.ps1 -OutputFile artifacts/installed-native-inputs.json
+          $installed = (Get-Content artifacts/installed-native-inputs.json -Raw | ConvertFrom-Json).key
+          if ($installed -cne '${{ needs.runtime-inputs.outputs.key }}') { throw 'No verified bundle exists and installed native compiler differs from the pinned reference; an explicitly validated native toolchain update is required' }
+          ./distribution/build-whisper.ps1 -OutputDirectory artifacts/whisper-runtime -IdentityFile artifacts/installed-native-inputs.json
       - name: Require every SHA256, both executable help checks and embedded UTF-8 manifests
         shell: pwsh
         run: |

@@ -13,6 +13,8 @@ static class Program{
     static int sessionNumber;
     static string Sanitize(string text)=>text.Replace(package,"[package]").Replace(data,"[settings]").Replace(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),"[profile]");
     [DllImport("user32.dll")]static extern bool PostMessage(IntPtr window,uint message,IntPtr w,IntPtr l);
+    [DllImport("user32.dll",EntryPoint="GetWindowLongW")]static extern int WindowStyle(IntPtr window,int index);
+    [DllImport("user32.dll",SetLastError=true)]static extern bool SetWindowPos(IntPtr window,IntPtr after,int x,int y,int width,int height,uint flags);
     static void Check(bool value,string why){if(!value)throw new Exception(why);checks++;Console.WriteLine("PASS "+why);}
     static void Until(Func<bool> predicate,string why,int seconds=30){var end=DateTime.UtcNow.AddSeconds(seconds);while(DateTime.UtcNow<end){if(predicate())return;Thread.Sleep(100);}throw new TimeoutException("Timed out: "+why);}
     [STAThread]static int Main(string[] args){
@@ -95,8 +97,14 @@ static class Program{
             var main=FindWindow(pid,"Rayme Smart Live Captions");var detach=Button(main,"Detach captions");Until(()=>detach.Current.IsEnabled,"Both enabled sources can detach");
             Check(CaptionWindows().Length==1,"Packaged overlay starts combined");Invoke(detach);Until(()=>CaptionWindows().Length==2,"Two real detached HWNDs");
             var windows=CaptionWindows();Invoke(Button(windows[0],"Lock overlay position"));Until(()=>windows[0].FindFirst(TreeScope.Descendants,new PropertyCondition(AutomationElement.NameProperty,"Unlock overlay position"))!=null,"Independent detached lock");
-            Check(!((TransformPattern)windows[0].GetCurrentPattern(TransformPattern.Pattern)).Current.CanResize&&((TransformPattern)windows[1].GetCurrentPattern(TransformPattern.Pattern)).Current.CanResize,"Lock disables resize on exactly one packaged caption window");
-            var before=windows[0].Current.BoundingRectangle;var other=windows[1].Current.BoundingRectangle;((TransformPattern)windows[1].GetCurrentPattern(TransformPattern.Pattern)).Resize(other.Width+30,other.Height+20);
+            // WPF omits TransformPattern on a non-resizable frameless window.
+            // Verify the actual native resize style rather than assuming that
+            // the deliberately unavailable automation pattern is implemented.
+            IntPtr locked=new(windows[0].Current.NativeWindowHandle),resizable=new(windows[1].Current.NativeWindowHandle);
+            Check((WindowStyle(locked,-16)&0x00040000)==0&&(WindowStyle(resizable,-16)&0x00040000)!=0,"Lock disables resize on exactly one packaged caption window");
+            var before=windows[0].Current.BoundingRectangle;var other=windows[1].Current.BoundingRectangle;
+            Check(SetWindowPos(resizable,IntPtr.Zero,0,0,(int)other.Width+30,(int)other.Height+20,0x0002|0x0004|0x0010),"Documented native resize request succeeds for the unlocked packaged window");
+            Until(()=>windows[1].Current.BoundingRectangle.Width>other.Width&&windows[1].Current.BoundingRectangle.Height>other.Height,"Second packaged window actually resized");
             Check(windows[0].Current.BoundingRectangle==before,"Resizing the second packaged window preserves the first placement");
             Invoke(Button(windows[0],"Open Controls"));Invoke(Find(pid,"Close Controls",ControlType.Button));Check(CaptionWindows().Length==2,"Closing detached Controls preserves both captions");
             Invoke(Button(windows[1],"Reattach captions"));Until(()=>CaptionWindows().Length==1,"Real packaged reattachment");main=FindWindow(pid,"Rayme Smart Live Captions");
