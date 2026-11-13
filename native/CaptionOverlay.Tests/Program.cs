@@ -153,6 +153,8 @@ static class Program {
         follow.ReaderMoved(500,500,selecting:true);Check(!follow.NeedsReveal(220,250,200),"An active user selection prevents near-bottom follow from rearming");
         follow.ReaderMoved(500,500);Check(follow.Following,"Explicit non-selection navigation back to the bottom resumes following");
         Check(follow.NeedsReveal(-3.8166666667,25.4466666667,209),"A latest line clipped by a committed anchor scroll still requires reveal");
+        follow.ReaderMoved(1673.4,1721.4,movingAway:true);Check(!follow.Following,"A 48-DIP upward wheel step stays in rereading mode inside the unchanged 60-DIP band");
+        follow.ReaderMoved(1711.4,1721.4);Check(follow.Following,"Downward reader return inside the existing near-bottom band resumes follow");
         Check(!follow.NeedsReveal(double.NaN,250,200)&&!follow.NeedsReveal(0,0,0),"Unmeasured layout cannot request a spurious scroll");
     }
     static void UsabilityTests(){

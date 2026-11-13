@@ -23,7 +23,7 @@ internal sealed class TranscriptPanel : Border {
     string identity="";
     Anchor? lastAnchor,pendingAnchor;
     bool pending,settling,readerNavigating,readerSelecting,thumbDragging,pendingReflow;
-    double pendingOffset;
+    double pendingOffset,readerStartOffset;
     long pendingRevision;
     bool lastSetup;
     readonly bool traceEnabled;
@@ -103,14 +103,18 @@ internal sealed class TranscriptPanel : Border {
     internal bool Following=>follow.Following;
     internal bool ScrollWorkPending=>pending||settling||readerNavigating;
     long navigationTicket;
-    internal void ReaderNavigating(bool selecting=false,string reason="reader-input"){readerNavigating=true;readerSelecting=selecting;follow.BeginNavigation();Trace(reason);ScheduleReaderPosition();}
+    internal void ReaderNavigating(bool selecting=false,string reason="reader-input"){readerStartOffset=Text.VerticalOffset;readerNavigating=true;readerSelecting=selecting;follow.BeginNavigation();Trace(reason);ScheduleReaderPosition();}
     void ScheduleReaderPosition(){
         if(!readerNavigating)return;
         long ticket=++navigationTicket;
         Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle,new Action(()=>{
             if(ticket!=navigationTicket||!IsLoaded)return;
             // A held thumb or text-selection drag may keep moving between events.
-            follow.ReaderMoved(Text.VerticalOffset,Math.Max(0,Text.ExtentHeight-Text.Document.PagePadding.Bottom-Text.ViewportHeight),readerSelecting&&!Text.Selection.IsEmpty);lastAnchor=Capture();Trace("reader-position");
+            // A single Windows wheel step is commonly 48 DIPs, inside the
+            // existing 60-DIP resume band. Moving upward is still rereading;
+            // only stationary/downward navigation may rearm near-bottom follow.
+            bool movingAway=Text.VerticalOffset<readerStartOffset-.5;
+            follow.ReaderMoved(Text.VerticalOffset,Math.Max(0,Text.ExtentHeight-Text.Document.PagePadding.Bottom-Text.ViewportHeight),readerSelecting&&!Text.Selection.IsEmpty,movingAway);lastAnchor=Capture();Trace("reader-position");
             if(!thumbDragging&&(Mouse.LeftButton!=MouseButtonState.Pressed||!Text.IsMouseCaptureWithin))readerNavigating=false;
             if(follow.Following&&!readerNavigating)QueueRestore(lastAnchor,Text.VerticalOffset,true);
         }));
@@ -224,7 +228,7 @@ internal sealed class TranscriptPanel : Border {
     void Trace(string reason){if(!traceEnabled)return;geometry.Enqueue(new{reason,slot=Slot,offset=Text.VerticalOffset,extent=Text.ExtentHeight,viewport=Text.ViewportHeight,width=Text.ViewportWidth,padding=Text.Document.PagePadding.Bottom,count=segments.Length,following=follow.Following,readerNavigating,readerSelecting,revision=follow.Revision});while(geometry.Count>128)geometry.Dequeue();}
     internal object ViewportDiagnostics(){
         Rect? rect=null;try{if(IsLoaded)rect=paragraph.Inlines.OfType<Run>().LastOrDefault()?.ContentEnd.GetCharacterRect(LogicalDirection.Backward);}catch(InvalidOperationException){}
-        return new{slot=Slot,following=follow.Following,readerNavigating,readerSelecting,thumbDragging,pending,settling,offset=Text.VerticalOffset,extent=Text.ExtentHeight,viewport=Text.ViewportHeight,width=Text.ViewportWidth,padding=Text.Document.PagePadding.Bottom,latestTop=rect is{IsEmpty:false}?rect?.Top:null,latestBottom=rect is{IsEmpty:false}?rect?.Bottom:null,steps=Geometry().TakeLast(10)};
+        return new{slot=Slot,following=follow.Following,readerNavigating,readerSelecting,readerStartOffset,thumbDragging,pending,settling,offset=Text.VerticalOffset,extent=Text.ExtentHeight,viewport=Text.ViewportHeight,width=Text.ViewportWidth,padding=Text.Document.PagePadding.Bottom,latestTop=rect is{IsEmpty:false}?rect?.Top:null,latestBottom=rect is{IsEmpty:false}?rect?.Bottom:null,steps=Geometry().TakeLast(10)};
     }
     internal bool LatestVisible(){var rect=paragraph.Inlines.OfType<Run>().LastOrDefault()?.ContentEnd.GetCharacterRect(LogicalDirection.Backward);return rect is {} r&&!r.IsEmpty&&r.Top>=-1&&r.Bottom<=Text.ViewportHeight+1;}
     internal (string Key,int Index,double Y)? ReadingMark(){var a=Capture();return a==null?null:(a.Key,a.Index,a.Y);}
