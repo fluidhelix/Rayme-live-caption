@@ -21,4 +21,12 @@ const {launchOverlay}=require('../windows-captions/native-overlay');
     await overlay.close();assert.equal(overlay.child.exitCode,0,'WPF must close cleanly on parent EOF');assert.equal(spawned,1);
     console.log('PASS: packaged WPF private session startup, single owned instance, graceful EOF shutdown');
   }finally{await overlay?.close();await ui.close();}
-})().catch(e=>{console.error(e.message);process.exitCode=1;});
+})().catch(e=>{
+  // execFile's message omits the managed UI automation exception on some Node
+  // versions. Keep bounded synthetic-test diagnostics visible in CI annotations.
+  const diagnostic=[e.stack||e.message,e.stdout,e.stderr].filter(Boolean).join('\n')
+    .replace(/https?:\/\/[^\s]+/g,'[session URL redacted]').slice(-8000);
+  console.error(diagnostic);
+  if(process.env.GITHUB_ACTIONS==='true')console.log('::error title=Packaged overlay lifecycle::'+diagnostic.replaceAll('%','%25').replaceAll('\r','%0D').replaceAll('\n','%0A'));
+  process.exitCode=1;
+});

@@ -17,6 +17,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       key: ${{ steps.identity.outputs.key }}
+      tools: ${{ steps.identity.outputs.tools }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
@@ -29,7 +30,10 @@ jobs:
       - id: identity
         name: Hash native inputs and actual compiler/SDK/tool versions
         shell: pwsh
-        run: ./distribution/runtime-inputs.ps1 -OutputFile artifacts/native-inputs.json
+        run: |
+          ./distribution/runtime-inputs.ps1 -OutputFile artifacts/native-inputs.json
+          $tools = (Get-Content artifacts/native-inputs.json -Raw | ConvertFrom-Json).inputs.toolchain | ConvertTo-Json -Compress
+          "tools=$tools" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
   whisper-runtime:
     if: github.event_name != 'pull_request'
     needs: runtime-inputs
@@ -52,10 +56,21 @@ jobs:
           arch: x64
       - name: Verify this runner has the exact expected native toolchain
         shell: pwsh
+        env:
+          EXPECTED_RUNTIME_TOOLS: ${{ needs.runtime-inputs.outputs.tools }}
         run: |
-          ./distribution/runtime-inputs.ps1 -OutputFile artifacts/native-inputs.json
-          $actual = (Get-Content artifacts/native-inputs.json -Raw | ConvertFrom-Json).key
-          if ($actual -cne '${{ needs.runtime-inputs.outputs.key }}') { throw 'Native toolchain changed between jobs; rerun identity resolution' }
+          try {
+            ./distribution/runtime-inputs.ps1 -OutputFile artifacts/native-inputs.json
+            $identity = Get-Content artifacts/native-inputs.json -Raw | ConvertFrom-Json
+            if ($identity.key -cne '${{ needs.runtime-inputs.outputs.key }}') {
+              $actualTools = $identity.inputs.toolchain | ConvertTo-Json -Compress
+              throw "Native toolchain changed between jobs. Expected key: ${{ needs.runtime-inputs.outputs.key }}; actual key: $($identity.key). Expected tools: $env:EXPECTED_RUNTIME_TOOLS; actual tools: $actualTools"
+            }
+          } catch {
+            $failure = ($_ | Out-String).Substring(0, [Math]::Min(8000, ($_ | Out-String).Length)).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Native toolchain identity::$failure"
+            throw
+          }
       - uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
         id: native-cache
         with:
