@@ -76,10 +76,10 @@ internal sealed partial class OverlayWindow {
         await AuditInputSmoke(output);
     }
     async Task AuditInputSmoke(string output){
-        var sample=new CaptionState();long revision=1;
+        var sample=new CaptionState();long revision=1;string currentDraft="";
         var source=new{id="a",generation=1,name="Synthetic input",identity="audit-input"};
         string Words(int n)=>string.Join(" ",Enumerable.Repeat("synthetic recognition words",n));
-        void Caption(long id,string text,bool final)=>sample.Apply(JsonSerializer.Serialize(new{type="caption",source,id,text,final,revision=revision++,capturedAt=id}));
+        void Caption(long id,string text,bool final){if(id==13&&!final)currentDraft=text;sample.Apply(JsonSerializer.Serialize(new{type="caption",source,id,text,final,revision=revision++,capturedAt=id}));}
         for(int id=1;id<=12;id++)Caption(id,"Verified stable sentence "+id+" "+Words(3),true);
         Caption(13,Words(3),false);
         var panel=new TranscriptPanel("a",true);var window=new Window{Width=450,Height=300,Content=panel,Owner=this,ShowInTaskbar=false};window.Show();
@@ -90,7 +90,7 @@ internal sealed partial class OverlayWindow {
         var bar=Descendants<ScrollBar>(panel.Text).Single(s=>s.Orientation==Orientation.Vertical);
         async Task Bottom(){ScrollBar.ScrollToBottomCommand.Execute(null,bar);await Wait(()=>!panel.ScrollWorkPending&&panel.Following&&panel.LatestVisible(),"routed scrollbar return to bottom");}
         var commands=new[]{(EditingCommands.SelectLeftByCharacter,"Shift+Left"),(EditingCommands.SelectRightByCharacter,"Shift+Right"),(EditingCommands.SelectLeftByWord,"Ctrl+Shift+Left"),(EditingCommands.SelectRightByWord,"Ctrl+Shift+Right"),(ApplicationCommands.SelectAll,"Ctrl+A / menu Select all")};
-        foreach(var (command,name) in commands){
+        int selectionRevision=0;foreach(var (command,name) in commands){
             await Bottom();
             // Place the caret in stable retained text; the real editor command
             // performs selection and traverses the production routed handler.
@@ -99,7 +99,7 @@ internal sealed partial class OverlayWindow {
             panel.Text.Selection.Select(caret,caret);Check(command.CanExecute(null,panel.Text),"Native selection command is available: "+name);
             command.Execute(null,panel.Text);await Wait(()=>!panel.ScrollWorkPending&&!panel.Text.Selection.IsEmpty&&!panel.Following,"routed selection "+name);
             string selected=panel.Text.Selection.Text;var mark=panel.ReadingMark();
-            Caption(13,"Revised earlier words "+Words(35),false);Paint();await AwaitPanels(panel);
+            Caption(13,"Revised earlier words "+(++selectionRevision)+" "+Words(35+selectionRevision),false);Paint();await AwaitPanels(panel);
             Check(!panel.Following&&!panel.Text.Selection.IsEmpty,"Same-source revision cannot rearm follow during "+name);
             if(command!=ApplicationCommands.SelectAll){
                 Check(panel.Text.Selection.Text==selected,"Same-source revision preserves selected retained text for "+name);
@@ -108,8 +108,16 @@ internal sealed partial class OverlayWindow {
         }
         await Bottom();double before=panel.Text.VerticalOffset;RoutedWheel(panel,1200);
         await Wait(()=>!panel.ScrollWorkPending&&!panel.Following&&panel.Text.VerticalOffset<before-1,"actual routed wheel scrolls older text");
-        var wheelMark=panel.ReadingMark()??throw new Exception("Missing wheel reading anchor");Caption(13,"A new correction "+Words(45),false);Paint();await AwaitPanels(panel);
+        var wheelMark=panel.ReadingMark()??throw new Exception("Missing wheel reading anchor");Caption(13,currentDraft+" "+Words(10),false);Paint();await AwaitPanels(panel);
         Check(!panel.Following&&Math.Abs((panel.MarkY(wheelMark.Key,wheelMark.Index)??double.MaxValue)-wheelMark.Y)<1,"Routed wheel reader position survives same-source recognition");
+        // Rewriting a prefix moves the numerical character index. Independently
+        // locate the surviving suffix word, rather than measuring a different
+        // character at the old index. Retain the exact-index append check above.
+        wheelMark=panel.ReadingMark()??throw new Exception("Missing corrected wheel anchor");string beforeCorrection=currentDraft,corrected="A new correction "+Words(60);
+        Check(wheelMark.Key=="a:1:13"&&wheelMark.Index>beforeCorrection.IndexOf("synthetic",StringComparison.Ordinal)+1,"Non-prefix wheel fixture anchors a word in the unchanged suffix");
+        int shiftedIndex=wheelMark.Index+corrected.Length-beforeCorrection.Length;
+        Caption(13,corrected,false);Paint();await AwaitPanels(panel);
+        Check(!panel.Following&&Math.Abs((panel.MarkY(wheelMark.Key,shiftedIndex)??double.MaxValue)-wheelMark.Y)<1,"Non-prefix same-source correction keeps the surviving suffix word at the reader's screen position");
         await Bottom();before=panel.Text.VerticalOffset;ScrollBar.PageUpCommand.Execute(null,bar);
         await Wait(()=>!panel.ScrollWorkPending&&!panel.Following&&panel.Text.VerticalOffset<before-1,"actual scrollbar PageUp interaction");
         Check(!panel.Following,"Scrollbar commands produce reader intent without a blanket ScrollChanged heuristic");

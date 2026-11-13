@@ -100,6 +100,7 @@ static class Program {
         Check(SourceColor.ContrastOnBlack("#000000")==1&&SourceColor.ContrastOnBlack("#FFFFFF")>20,"Color-picker contrast warning uses actual contrast");
         Check(TextPosition.Map("hello old ending","hello corrected ending",3)==3,"Reading anchors in unchanged prefix remain stable");
         Check(TextPosition.Map("hello old ending","hello corrected ending",12)==18,"Reading anchors in unchanged suffix follow final correction");
+        const string oldSuffix="old prefix retained anchor",newSuffix="corrected longer prefix retained anchor";Check(TextPosition.Map(oldSuffix,newSuffix,oldSuffix.IndexOf("anchor",StringComparison.Ordinal))==newSuffix.IndexOf("anchor",StringComparison.Ordinal),"A rewritten prefix requires the surviving word's shifted character index");
         // Reproduce the removed append-only rule: Whisper can revise the prefix
         // and add words, which still requires reveal when its tail is obscured.
         string draft="early words",corrected="Corrected earlier words continue";
