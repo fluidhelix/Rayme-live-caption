@@ -129,6 +129,10 @@ static class Program {
         Check(s.History.Count(c=>c.Source.Id=="b")==200&&s.History.Count(c=>c.Source.Id=="device")==200,"A's cleanup cannot evict B or device history");
         s=new CaptionState();
         string Retire(long id,long revision,bool terminal=false)=>JsonSerializer.Serialize(new{type="segment-retired",source=new{id=A.Id,generation=A.Generation,name=A.Name,identity=A.Identity},id,revision,terminal,retain=true});
+        var capped=new CaptionState();for(int id=1;id<=200;id++)capped.Apply(Event("caption",A,id,true,capturedAt:id));capped.Apply(Event("caption",A,201,false,"Useful draft at capacity",201));
+        var liveKey=TranscriptPresentation.Segments(capped,"a").Last().Key;capped.Apply(Retire(201,1));
+        Check(capped.History.Count==200&&capped.History[0].Id==2&&capped.History[^1].Unfinished,"At-capacity retirement consumes one retained slot and prunes the oldest record");
+        Check(TranscriptPresentation.Segments(capped,"a").Last().Key==liveKey,"Budget-bound retirement retains the same draft's visual identity");
         s.Apply(Event("caption",A,1,false,"Unverified words"));s.Apply(Retire(1,1));
         Check(s.Partials.Count==0&&s.History.Single() is {Final:false,Unfinished:true,Text:"Unverified words"},"Retirement retains the actual draft without declaring it final");
         var segment=TranscriptPresentation.Segments(s,"a").Single();Check(segment.Unfinished&&!segment.Final&&segment.Text=="Unverified words","Retained draft receives no invented final punctuation");

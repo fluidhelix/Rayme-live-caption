@@ -186,6 +186,16 @@ internal sealed partial class OverlayWindow {
         mark=a.ReadingMark()??throw new Exception("Missing font anchor");Paint(30);await AwaitPanels(a,b);Check(!a.Following&&Math.Abs((a.MarkY(mark.Key,mark.Index)??double.MaxValue)-mark.Y)<1,"Font-size reflow preserves a surviving native reading anchor");
         a.ReaderNavigating();a.Scroll.ScrollToEnd();await AwaitPanels(a,b);
         foreach(var size in new[]{(700d,520d),(380d,260d),(720d,540d)}){wa.Width=size.Item1;wa.Height=size.Item2;await AwaitPanels(a,b);Check(a.Following&&a.LatestVisible()&&sample.History.Count==count,"Following resize reveals retained older text without losing newest speech or history");}
+        // At capacity, retirement also legitimately prunes the oldest retained
+        // record. Keep the reading word, not an impossible unchanged prefix.
+        Caption("a",223,"Unfinished synthetic recognition "+Words(25),false,1);Paint(30);await AwaitPanels(a,b);
+        var boundaryMark=a.ReadingMark()??throw new Exception("Missing full-budget expiration anchor");var oldest=CaptionPresentation.RowKey(sample.History.First(c=>c.Source.Id=="a"));
+        sample.Apply("""{"type":"segment-retired","source":{"id":"a","generation":1,"name":"Synthetic a","identity":"reading-a"},"id":223,"revision":1,"terminal":false,"retain":true}""");Paint(30);await AwaitPanels(a,b);
+        Check(sample.History.Count(c=>c.Source.Id=="a")==200&&a.MarkY(oldest,0)==null&&sample.History.Single(c=>c.Source.Id=="a"&&c.Id==223).Unfinished,"Expiration at the full budget retains its draft and prunes only the required oldest prefix");
+        Check(!a.IsLive&&a.LatestVisible()&&Math.Abs((a.MarkY(boundaryMark.Key,boundaryMark.Index)??double.MaxValue)-boundaryMark.Y)<1,"Full-budget expiration preserves the surviving reading word despite prefix pruning");
+        // Isolate classification-only expiration with one unused retained slot.
+        // The original exact text/offset assertion remains unchanged below.
+        sample=new CaptionState();for(int i=24;i<=222;i++)Caption("a",i,"Retained synthetic sentence "+i+" "+Words(2),true,1);Caption("b",1,Words(65),false,1);Paint(30);await AwaitPanels(a,b);
         Caption("a",223,"Unfinished synthetic recognition "+Words(25),false,1);Paint(30);await AwaitPanels(a,b);double offset=a.Text.VerticalOffset;string draft=a.PlainText;
         sample.Apply("""{"type":"segment-retired","source":{"id":"a","generation":1,"name":"Synthetic a","identity":"reading-a"},"id":223,"revision":1,"terminal":false,"retain":true}""");Paint(30);await AwaitPanels(a,b);
         Check(!a.IsLive&&a.PlainText==draft&&a.Text.VerticalOffset==offset,"Unfinished expiration changes classification without erasing text or scrolling");
