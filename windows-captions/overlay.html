@@ -12,6 +12,7 @@
 <details><summary>Caption settings</summary><label>Text size <input id="font" type="range" min="16" max="48" value="24"></label> <button id="clear">Clear history everywhere</button><p>Enable up to two applications OR a playback device. Browser labels identify processes, not tabs. Nothing is recorded. Move/resize this window normally.</p></details></header>
 <main aria-label="Caption history"><div id="source-status" role="status"></div><div id="history"></div><div id="partials"></div><p id="partial" hidden></p><p id="empty">Waiting for conversation…</p></main>
 <script>
+/*RAYME_HISTORY_POLICY*/
 const historyEl=document.getElementById('history'),partial=document.getElementById('partial'),statusEl=document.getElementById('status'),devices=document.getElementById('devices'),empty=document.getElementById('empty');
 let entries=[],partials={},sources={},apps=[],outputs=[],socket,paused=false,follow=true,deviceDefault='default';
 class SegmentLedger {
@@ -33,7 +34,7 @@ const books=new Map();let epochs={};
 function book(e){const k=key(e);if(!books.has(k))books.set(k,new SegmentLedger());return books.get(k);}
 window.addEventListener('scroll',()=>{follow=innerHeight+scrollY>=document.body.scrollHeight-80;});
 function key(e){return (e.source?.id||'legacy')+':'+(e.source?.generation||0);}
-function row(e){const p=document.createElement('p');const label=document.createElement('strong');label.textContent=e.source?.name||'Playback output';p.append(label,document.createElement('br'),document.createTextNode(e.text));p.dataset.source=e.source?.id||'legacy';if(e.queueAgeMs!==undefined){const info=document.createElement('small');info.style.display='block';info.textContent='Inference '+e.inferenceMs+' ms · queue '+e.queueAgeMs+' ms';p.append(info);}return p;}
+function row(e){const p=document.createElement('p');const label=document.createElement('strong');label.textContent=e.source?.name||'Playback output';p.append(label,document.createElement('br'),document.createTextNode(e.text));p.dataset.source=e.source?.id||'legacy';if(e.unfinished){p.dataset.unfinished='true';p.title='Unfinished recognition retained for reading; not a verified final.';const note=document.createElement('small');note.textContent=' · Unfinished';label.append(note);}if(e.queueAgeMs!==undefined){const info=document.createElement('small');info.style.display='block';info.textContent='Inference '+e.inferenceMs+' ms · queue '+e.queueAgeMs+' ms';p.append(info);}return p;}
 function render(){historyEl.replaceChildren(...entries.map(row));document.getElementById('partials').replaceChildren(...Object.values(partials).filter(e=>e.text).map(e=>{const p=row(e);p.style.borderLeft='4px solid #707070';p.dataset.partial='true';return p;}));document.getElementById('source-status').replaceChildren(...Object.values(sources).map(e=>{const d=document.createElement('div');d.textContent=e.source.name+' — '+e.state+': '+e.message;return d;}));empty.hidden=entries.length>0||Object.values(partials).some(e=>e.text);if(follow)window.scrollTo(0,document.body.scrollHeight);}
 function send(e){if(socket?.readyState===1)socket.send(JSON.stringify(e));}
 function controls(supported){
@@ -42,14 +43,14 @@ function controls(supported){
 }
 function handle(e){
  if(e.type==='snapshot'){
-  entries=e.history||[];partials={};sources=e.sources||{};epochs=e.epochs||Object.fromEntries(Object.entries(sources).map(([id,s])=>[id,{source:s.source,removed:false}]));books.clear();
+  entries=RaymeHistory.trim(e.history||[]);partials={};sources=e.sources||{};epochs=e.epochs||Object.fromEntries(Object.entries(sources).map(([id,s])=>[id,{source:s.source,removed:false}]));books.clear();
   for(const [slot,data]of Object.entries(e.segments||{})){const l=book({source:slot==='legacy'?null:{id:slot,generation:data.generation}});l.floor=data.floor;l.finalized=data.finalized;l.latest=data.latest||data.finalized;l.entries=new Map(data.entries.map(v=>[v.id,v]));}
-  if(!e.segments)for(const item of entries)book(item).mark(item.id,0,{closed:true,cleared:true,final:true});
+  if(!e.segments)for(const item of entries)if(item.final)book(item).mark(item.id,0,{closed:true,cleared:true,final:true});
   for(const item of [...Object.values(e.partials||{}),...(e.partial?[e.partial]:[])]){const l=book(item),revision=l.revision(item.id,item.revision),stamp=epochs[item.source?.id];if(stamp&&(stamp.removed||stamp.source.generation!==item.source.generation||stamp.source.identity!==item.source.identity))continue;if(l.allows(item.id,revision,false,true)&&item.text){partials[item.source?.id||'legacy']={...item,revision};l.mark(item.id,revision);}}
   apps=e.apps||[];outputs=e.devices;deviceDefault=e.selected||'default';paused=e.paused;statusEl.textContent=e.status;controls(e.processSupported);render();return;
  }
  if(e.source){const slot=e.source.id,stamp=epochs[slot];if(stamp&&(stamp.source.generation>e.source.generation||stamp.source.generation===e.source.generation&&stamp.source.identity!==e.source.identity||stamp.removed&&stamp.source.generation>=e.source.generation))return;
-  if(!stamp||stamp.source.generation<e.source.generation){delete partials[slot];for(const k of books.keys())if(k.startsWith(slot+':'))books.delete(k);if(stamp&&stamp.source.identity!==e.source.identity){entries=entries.filter(c=>c.source?.id!==slot);delete sources[slot];}}
+  if(!stamp||stamp.source.generation<e.source.generation){if(stamp?.source.identity===e.source.identity&&partials[slot])entries=RaymeHistory.replace(entries,{...partials[slot],final:false,unfinished:true});delete partials[slot];for(const k of books.keys())if(k.startsWith(slot+':'))books.delete(k);if(stamp&&stamp.source.identity!==e.source.identity){entries=entries.filter(c=>c.source?.id!==slot);delete sources[slot];}}
   epochs[slot]={source:e.source,removed:e.type==='source-removed'};
  }
  if(e.type==='status')statusEl.textContent=e.message;
@@ -64,12 +65,12 @@ function handle(e){
  if(e.type==='paused'){paused=e.paused;controls();}
  if(e.type==='cleared'){entries=[];partials={};render();}
  if(e.type==='segment-retired'){
-  const slot=e.source?.id||'legacy',l=book(e),revision=l.revision(e.id,e.revision),terminal=e.terminal!==false;l.mark(e.id,revision,{closed:terminal,cleared:true});const p=partials[slot];if(p&&(p.id<e.id||p.id===e.id&&(terminal||p.revision<=revision)))delete partials[slot];render();
+  const slot=e.source?.id||'legacy',l=book(e),revision=l.revision(e.id,e.revision),terminal=e.terminal!==false;l.mark(e.id,revision,{closed:terminal,cleared:true});const p=partials[slot];if(p&&(p.id<e.id||p.id===e.id&&(terminal||p.revision<=revision))){if(e.retain===true)entries=RaymeHistory.replace(entries,{...p,final:false,unfinished:true});delete partials[slot];}if(terminal&&e.retain!==true)entries=entries.filter(c=>!c.unfinished||RaymeHistory.key(c)!==RaymeHistory.key(e));render();
  }
  if(e.type==='caption'){
   const l=book(e),slot=e.source?.id||'legacy',revision=l.revision(e.id,e.revision);if(!l.allows(e.id,revision,e.final))return;e={...e,revision};
   if(!e.text?.trim()){l.mark(e.id,revision,{closed:!!e.final,cleared:true});const p=partials[slot];if(p&&(p.id<e.id||p.id===e.id&&p.revision<=revision))delete partials[slot];}
-  else{l.mark(e.id,revision,{closed:!!e.final,cleared:!!e.final,final:!!e.final});if(e.final){if(partials[slot]?.id<=e.id)delete partials[slot];entries.push(e);entries.sort((a,b)=>(a.capturedAt||0)-(b.capturedAt||0));entries=entries.slice(-30);}else if(!partials[slot]||partials[slot].id<=e.id)partials[slot]=e;}
+  else{const previous=partials[slot];if(previous&&previous.id<e.id)entries=RaymeHistory.replace(entries,{...previous,final:false,unfinished:true});l.mark(e.id,revision,{closed:!!e.final,cleared:!!e.final,final:!!e.final});if(e.final){if(partials[slot]?.id<=e.id)delete partials[slot];entries=RaymeHistory.replace(entries,e);}else if(!partials[slot]||partials[slot].id<=e.id){entries=entries.filter(c=>RaymeHistory.key(c)!==RaymeHistory.key(e));partials[slot]=e;}}
   render();
  }
 }

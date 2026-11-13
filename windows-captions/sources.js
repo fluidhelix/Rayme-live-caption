@@ -17,13 +17,13 @@ class SourceScheduler {
   remove(id){const state=this.sources.get(id);if(state){this.clearTimer(state.timer);this.clearTimer(state.queueTimer);state.finals=[];state.partial=null;state.displayed=null;state.finalJobs.clear();}this.sources.delete(id);}
   health(state,value,message,recovered=false){this.status(state.source,value,message,{component:'inference',recovered});}
   age(job){return Math.max(0,this.elapsedNow()-job.freshAt);}
-  retire(source,id,reason,terminal=true,revision){
+  retire(source,id,reason,terminal=true,revision,retain=false){
     const state=this.sources.get(source.id);if(!state||state.source.generation!==source.generation)return;
     const rev=revision??++state.revision;state.ledger.mark(id,rev,{closed:terminal,cleared:true});
     if(terminal){state.finalJobs.delete(id);state.finals=state.finals.filter(j=>j.id!==id);}
     if(state.partial&&(state.partial.id<id||state.partial.id===id&&(terminal||state.partial.revision<=rev)))state.partial=null;
     if(state.displayed&&(state.displayed.id<id||state.displayed.id===id&&(terminal||state.displayed.revision<=rev))){this.clearTimer(state.timer);state.displayed=null;state.timer=null;}
-    this.publish({type:'segment-retired',source:state.source,id,revision:rev,terminal,reason});this.watchQueue(state);
+    this.publish({type:'segment-retired',source:state.source,id,revision:rev,terminal,reason,retain});this.watchQueue(state);
   }
   add(source,job){
     const state=this.sources.get(source.id);
@@ -36,7 +36,7 @@ class SourceScheduler {
     if(job.final){
       if(state.finalJobs.has(job.id))return;state.finalJobs.add(job.id);
       state.finalized=Math.max(state.finalized,job.id);if(state.partial?.id<=job.id)state.partial=null;
-      if(state.finals.length===2){const skipped=state.finals.shift();this.retire(source,skipped.id,'Overload: an older finalized segment was skipped.',true,skipped.revision);this.health(state,'delayed','Overloaded: an older finalized segment was skipped.');}
+      if(state.finals.length===2){const skipped=state.finals.shift();this.retire(source,skipped.id,'Overload: an older finalized segment was skipped.',true,skipped.revision,true);this.health(state,'delayed','Overloaded: final recognition was skipped; any displayed draft is retained as unfinished.');}
       state.finals.push(item);
     }else state.partial=item;
     this.watchQueue(state);this.pump();
@@ -54,7 +54,7 @@ class SourceScheduler {
       if(!state.ledger.allows(job.id,job.revision,job.final)||!job.final&&job.id<=state.finalized){state.finals=state.finals.filter(j=>j!==job);if(job.final)state.finalJobs.delete(job.id);if(state.partial===job)state.partial=null;continue;}
       if(this.age(job)<=this.maxAgeMs)continue;
       state.finals=state.finals.filter(j=>j!==job);if(state.partial===job)state.partial=null;
-      this.retire(state.source,job.id,'Queued audio exceeded the caption freshness limit.',job.final,job.revision);this.health(state,'delayed','Stale queued audio was skipped; waiting for current speech.');
+      this.retire(state.source,job.id,'Queued audio exceeded the caption freshness limit.',job.final,job.revision,true);this.health(state,'delayed','Stale queued audio was skipped; any displayed draft is retained as unfinished.');
     }
     this.watchQueue(state);
   }
@@ -69,9 +69,9 @@ class SourceScheduler {
     try{
       const text=await this.infer(job.pcm,this.controller.signal);
       if(this.closed||this.sources.get(key)!==state||!state.ledger.allows(job.id,job.revision,job.final)||!job.final&&job.id<=state.finalized)return;
-      if(this.age(job)>this.maxAgeMs){handled=true;this.retire(job.source,job.id,'Completed inference exceeded the caption freshness limit.',job.final,job.revision);this.health(state,'delayed','A stale transcription result was skipped; waiting for current speech.');return;}
+      if(this.age(job)>this.maxAgeMs){handled=true;this.retire(job.source,job.id,'Completed inference exceeded the caption freshness limit.',job.final,job.revision,true);this.health(state,'delayed','A stale transcription result was skipped; any displayed draft is retained as unfinished.');return;}
       handled=true;
-      if(!text?.trim())this.retire(job.source,job.id,'No recognizable speech in this transcription.',job.final,job.revision);
+      if(!text?.trim())this.retire(job.source,job.id,'No recognizable speech in this transcription.',job.final,job.revision,true);
       else{
         state.ledger.mark(job.id,job.revision,{closed:job.final,cleared:job.final,final:job.final});
         this.publish({type:'caption',source:job.source,id:job.id,revision:job.revision,final:job.final,text,capturedAt:job.capturedAt,audioEndAt:job.audioEndAt,inferenceMs:this.elapsedNow()-started,queueAgeMs});
@@ -80,12 +80,12 @@ class SourceScheduler {
       }
       state.failed=false;this.health(state,state.finals.length?'delayed':text?.trim()?'capturing':'waiting',state.finals.length?'Finalized audio is pending.':text?.trim()?'Transcription ready.':'Audio processed; no recognizable speech.',true);
     }catch{
-      if(!this.closed&&this.sources.get(key)===state&&state.ledger.allows(job.id,job.revision,job.final)){handled=true;this.retire(job.source,job.id,'Local transcription failed.',job.final,job.revision);state.failed=true;this.health(state,'unavailable','Local transcription failed; new audio will be retried.');}
+      if(!this.closed&&this.sources.get(key)===state&&state.ledger.allows(job.id,job.revision,job.final)){handled=true;this.retire(job.source,job.id,'Local transcription failed.',job.final,job.revision,true);state.failed=true;this.health(state,'unavailable','Local transcription failed; any displayed draft is unfinished. New audio will be retried.');}
     }finally{const duration=this.elapsedNow()-started;this.inferenceMs=this.inferenceMs?this.inferenceMs*.7+duration*.3:duration;if(job.final)state.finalJobs.delete(job.id);this.busy=false;this.active=null;this.controller=null;if(!handled&&!this.closed&&this.sources.get(key)===state&&!state.failed&&!state.finals.length&&!state.partial)this.health(state,'waiting','Waiting for current speech.');this.pump();}
   }
   expirePartial(state,key,{id,revision,source,freshAt}){
     this.clearTimer(state.timer);const display={id,revision};state.displayed=display;
-    state.timer=this.setTimer(()=>{if(!this.closed&&this.sources.get(key)===state&&state.displayed===display){this.retire(source,id,'Displayed partial exceeded the freshness limit.',false,revision);this.health(state,'delayed','An unfinished caption expired; waiting for current speech.');}},Math.max(1,this.maxAgeMs-Math.max(0,this.elapsedNow()-freshAt)+1));state.timer?.unref?.();
+    state.timer=this.setTimer(()=>{if(!this.closed&&this.sources.get(key)===state&&state.displayed===display){this.retire(source,id,'Displayed partial exceeded the freshness limit.',false,revision,true);this.health(state,'delayed','Recognition is unfinished; the displayed draft is retained for reading. Waiting for current speech.');}},Math.max(1,this.maxAgeMs-Math.max(0,this.elapsedNow()-freshAt)+1));state.timer?.unref?.();
   }
   close(){this.closed=true;for(const key of [...this.sources.keys()])this.remove(key);this.controller?.abort();}
 }

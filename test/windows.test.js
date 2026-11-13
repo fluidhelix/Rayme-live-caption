@@ -62,13 +62,13 @@ test('capture disconnect resets pipeline; close kills owned child and cancels re
  await c.select('default');child.stdout.write(tone(10));assert.equal(bytes,320);child.emit('exit',2);assert.ok(c.retry);assert.equal(resets,2);await c.select('another');child.stderr.write('{"type":"ready"}\n');assert.equal(status.at(-1),'Listening to playback audio');await c.close();assert.equal(c.child,null);assert.equal(c.retry,null);
 });
 test('child shutdown exits a real spawned process',async()=>{const c=spawn(process.execPath,['-e','setInterval(()=>{},1000)']);await new Promise(r=>c.once('spawn',r));await stopChild(c);assert.ok(c.exitCode!==null||c.signalCode);});
-test('UI rejects unauthorized connections, replays 30 history entries and latest partial on reconnect',async()=>{
+test('UI rejects unauthorized connections, replays 200 per-source history entries and latest partial on reconnect',async()=>{
  const ui=await createUI({port:0,onSelect:async()=>{},onRefresh:async()=>{}});
  try{
   assert.equal((await fetch(ui.url.split('?')[0])).status,404);
   assert.equal((await fetch(ui.url)).status,200);
-  for(let id=1;id<=35;id++)ui.publish({type:'caption',id,text:'sentence '+id,final:true});ui.publish({type:'caption',id:36,text:'partial',final:false});
-  for(let i=0;i<2;i++){const ws=new WebSocket(ui.url.replace('http:','ws:'),{origin:new URL(ui.url).origin});const data=await new Promise((r,j)=>{ws.once('message',m=>r(JSON.parse(m)));ws.once('error',j);});assert.equal(data.history.length,30);assert.equal(data.history[0].id,6);assert.equal(data.partial.id,36);ws.terminate();}
+  for(let id=1;id<=235;id++)ui.publish({type:'caption',id,text:'sentence '+id,final:true});ui.publish({type:'caption',id:236,text:'partial',final:false});
+  for(let i=0;i<2;i++){const ws=new WebSocket(ui.url.replace('http:','ws:'),{origin:new URL(ui.url).origin});const data=await new Promise((r,j)=>{ws.once('message',m=>r(JSON.parse(m)));ws.once('error',j);});assert.equal(data.history.length,200);assert.equal(data.history[0].id,36);assert.equal(data.partial.id,236);ws.terminate();}
   await new Promise(r=>{const bad=new WebSocket(ui.url.replace('http:','ws:'),{origin:'https://evil.example'});bad.once('error',()=>r());});
  }finally{await ui.close();}
 });

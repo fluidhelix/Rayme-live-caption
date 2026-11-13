@@ -3,7 +3,7 @@ const fs=require('node:fs');
 const path=require('node:path');
 const crypto=require('node:crypto');
 const pins=require('./assets.json');
-const backend=['audio.js','capture.js','main.js','native-overlay.js','server.js','setup.js','sources.js','whisper.js','models.json','overlay.html','processing.js','runtime-device.js','caption-lifecycle.js','capture-session.js'];
+const backend=['audio.js','capture.js','main.js','native-overlay.js','server.js','setup.js','sources.js','whisper.js','models.json','overlay.html','processing.js','runtime-device.js','caption-lifecycle.js','capture-session.js','history-policy.js'];
 function hash(file){return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');}
 function walk(dir){return fs.readdirSync(dir,{withFileTypes:true}).flatMap(e=>e.isDirectory()?walk(path.join(dir,e.name)):[path.join(dir,e.name)]);}
 function assemble({repo,out,launcher,overlay,helper,node,whisper,cuda,licenses,commit,nativeRuntimeKey,nativeRuntimeProducerCommit}){
@@ -40,7 +40,7 @@ function validate(out){
     }
   }
   for(const name of Object.keys(entries))if(!fs.existsSync(path.join(out,name)))throw Error('Missing package file: '+name);
-  for(const name of ['Rayme.exe','App/node/node.exe','App/native/CaptionOverlay.exe','App/native/LoopbackCapture.exe','App/whisper/cpu/whisper-server.exe','App/whisper/cuda/whisper-server.exe','App/whisper/cuda/cublas64_12.dll','App/whisper/cuda/cublasLt64_12.dll','App/whisper/cuda/cudart64_12.dll','App/backend/node_modules/ws/index.js','Licenses/OpenAI-Whisper.txt','Licenses/NAudio.txt','Licenses/DotNet.txt','Licenses/WhisperCpp.txt','Licenses/NVIDIA-cublas.txt','Licenses/NVIDIA-cudart.txt'])if(!entries[name])throw Error('Required component missing: '+name);
+  for(const name of ['Rayme.exe','App/node/node.exe','App/native/CaptionOverlay.exe','App/native/LoopbackCapture.exe','App/whisper/cpu/whisper-server.exe','App/whisper/cuda/whisper-server.exe','App/whisper/cuda/cublas64_12.dll','App/whisper/cuda/cublasLt64_12.dll','App/whisper/cuda/cudart64_12.dll','App/backend/node_modules/ws/index.js','App/backend/history-policy.js','Licenses/OpenAI-Whisper.txt','Licenses/NAudio.txt','Licenses/DotNet.txt','Licenses/WhisperCpp.txt','Licenses/NVIDIA-cublas.txt','Licenses/NVIDIA-cudart.txt'])if(!entries[name])throw Error('Required component missing: '+name);
   return entries;
 }
 if(require.main===module){const options=JSON.parse(fs.readFileSync(process.argv[2],'utf8'));assemble(options);console.log('Portable allowlist and integrity validated');}

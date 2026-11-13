@@ -30,8 +30,11 @@ applications enabled; choose it explicitly for two independent caption windows.
 Reattach from either window or the tray. Disabling a source restores one window.
 Whole-device playback uses one panel. Each scrolls independently; captions follow
 new speech only while you are near the bottom. Scroll back down to resume follow.
-Finalized captions remain during silence and pauses. History is bounded to the
-latest 30 finalized segments across sources. Clear history is shared by all clients.
+Finalized captions remain during silence and pauses. Each source retains up to
+200 segments, with character and byte budgets for long captions. Underlined DRAFT
+text is unfinished recognition kept for reading, not a verified final. Scroll
+up to reread; returning near the bottom resumes follow. Resizing changes wrapping
+and visible lines, never the retention budget. Clear history is shared by all clients.
 Controls show recent audio signal levels; very quiet speech may need higher
 application playback volume. Rayme does not change your Windows device settings.
 

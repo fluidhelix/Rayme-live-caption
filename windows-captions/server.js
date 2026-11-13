@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomBytes } = require('node:crypto');
 const { SegmentLedger, sourceHealth } = require('./caption-lifecycle');
+const historyPolicy = require('./history-policy');
 const { WebSocketServer, WebSocket } = require('ws');
 async function createUI({ port = 8090, onSelect, onRefresh, onConfigure, onPause, onSetup }) {
   const token = randomBytes(24).toString('hex');
@@ -15,7 +16,7 @@ async function createUI({ port = 8090, onSelect, onRefresh, onConfigure, onPause
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname !== '/' || url.searchParams.get('token') !== token) { res.writeHead(404).end(); return; }
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store', 'Content-Security-Policy': "default-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'" });
-    res.end(fs.readFileSync(path.join(__dirname, 'overlay.html')));
+    res.end(fs.readFileSync(path.join(__dirname, 'overlay.html'),'utf8').replace('/*RAYME_HISTORY_POLICY*/',()=>fs.readFileSync(path.join(__dirname,'history-policy.js'),'utf8')));
   });
   const wss = new WebSocketServer({ noServer: true, maxPayload: 8192 });
   server.on('upgrade', (req, socket, head) => {
@@ -30,6 +31,7 @@ async function createUI({ port = 8090, onSelect, onRefresh, onConfigure, onPause
       const epoch=state.epochs[slot];
       if(epoch&&(epoch.source.generation>source.generation||epoch.source.generation===source.generation&&epoch.source.identity!==source.identity||epoch.removed&&epoch.source.generation>=source.generation))return;
       if(!epoch||epoch.source.generation<source.generation){
+        if(epoch?.source.identity===source.identity&&state.partials[slot])state.history=historyPolicy.replace(state.history,{...state.partials[slot],final:false,unfinished:true});
         delete state.partials[slot];delete state.audioLevels[slot];ledgers.delete(slot);delete state.segments[slot];
         if(epoch&&epoch.source.identity!==source.identity){state.history=state.history.filter(c=>c.source?.id!==slot);delete state.sources[slot];}
         state.sources[slot]={...(state.sources[slot]||{state:'waiting',message:'Waiting for audio'}),type:'source-status',source};
@@ -59,26 +61,32 @@ async function createUI({ port = 8090, onSelect, onRefresh, onConfigure, onPause
       const book=ledger(slot,source?.generation||0),revision=book.revision(event.id,event.revision),terminal=event.terminal!==false;
       book.mark(event.id,revision,{closed:terminal,cleared:true});event={...event,revision,terminal};
       const pending=source?state.partials[slot]:state.partial;
+      if(event.retain===true&&pending&&(pending.id<event.id||pending.id===event.id&&(terminal||(pending.revision||0)<=revision)))state.history=historyPolicy.replace(state.history,{...pending,final:false,unfinished:true});
+      if(terminal&&event.retain!==true)state.history=state.history.filter(c=>!c.unfinished||historyPolicy.key(c)!==historyPolicy.key(event));
       if(pending&&(pending.id<event.id||pending.id===event.id&&(terminal||(pending.revision||0)<=revision))){if(source)delete state.partials[slot];else state.partial=null;}
       syncLedger(slot,source?.generation||0);
     }
     if(event.type==='caption'){
       const book=ledger(slot,source?.generation||0),revision=book.revision(event.id,event.revision);
       if(!book.allows(event.id,revision,event.final))return;
-      event={...event,revision};
+      event={...event,revision,text:typeof event.text==='string'?historyPolicy.text(event.text):''};
       // An empty result retires this revision; a final result closes its segment.
       if(!event.text?.trim()){
-        event={type:'segment-retired',source,id:event.id,revision,terminal:!!event.final,reason:'No recognizable speech.'};
+        event={type:'segment-retired',source,id:event.id,revision,terminal:!!event.final,retain:true,reason:'No recognizable speech.'};
         book.mark(event.id,revision,{closed:event.terminal,cleared:true});
         const pending=source?state.partials[slot]:state.partial;
+        if(pending&&(pending.id<event.id||pending.id===event.id&&(event.terminal||(pending.revision||0)<=revision)))state.history=historyPolicy.replace(state.history,{...pending,final:false,unfinished:true});
         if(pending&&(pending.id<event.id||pending.id===event.id&&(event.terminal||(pending.revision||0)<=revision))){if(source)delete state.partials[slot];else state.partial=null;}
       }else{
+        const previous=source?state.partials[slot]:state.partial;
+        if(previous&&previous.id<event.id)state.history=historyPolicy.replace(state.history,{...previous,final:false,unfinished:true});
         book.mark(event.id,revision,{closed:!!event.final,cleared:!!event.final,final:!!event.final});
         if(event.final){
           if(source){if(state.partials[slot]?.id<=event.id)delete state.partials[slot];}else if(state.partial?.id<=event.id)state.partial=null;
-          state.history.push(event);state.history.sort((a,b)=>(a.capturedAt||0)-(b.capturedAt||0));state.history=state.history.slice(-30);
+          state.history=historyPolicy.replace(state.history,event);
         }else if(source){if(!state.partials[slot]||state.partials[slot].id<=event.id)state.partials[slot]=event;}
         else if(!state.partial||state.partial.id<=event.id)state.partial=event;
+        if(!event.final)state.history=state.history.filter(c=>historyPolicy.key(c)!==historyPolicy.key(event));
       }
       syncLedger(slot,source?.generation||0);
     }

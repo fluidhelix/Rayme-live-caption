@@ -107,7 +107,7 @@ internal sealed partial class OverlayWindow {
             UiCheck(activeModel!.Text.Contains("ggml-large-v3-turbo.bin")&&processingChoices.Count==1,"Ready names the active model and exposes one processing selector");
             // Source panels and scroll positions are independent of one another.
             for(int i=2;i<28;i++)state.Apply(JsonSerializer.Serialize(new{type="caption",source=new{id="a",generation=1,name="Browser conversation",identity="test-a"},id=i,final=true,text="Conversation line "+i+" with enough words to wrap across this narrow panel.",capturedAt=i}));
-            Render();await Task.Delay(80);UpdateLayout();panels["a"].Scroll.ScrollToTop();await Task.Delay(80);
+            Render();await Task.Delay(80);UpdateLayout();panels["a"].ReaderNavigating();panels["a"].Scroll.ScrollToTop();await Task.Delay(80);
             double reread=panels["a"].Scroll.VerticalOffset;var fixedA=panels["a"];var fixedB=panels["b"];
             state.Apply("""{"type":"caption","source":{"id":"b","generation":2,"name":"Voice chat","identity":"test-b"},"id":2,"final":false,"text":"More live words","capturedAt":100}""");Render();await Task.Delay(80);
             UiCheck(ReferenceEquals(fixedA,panels["a"])&&ReferenceEquals(fixedB,panels["b"])&&panels["a"].Scroll.VerticalOffset==reread,"Other-source captions preserve panel identity and the reader's independent scroll position");

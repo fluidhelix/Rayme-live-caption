@@ -3,7 +3,7 @@ using System.Text.Json;
 namespace Rayme.Overlay;
 
 public record Source(string Id, long Generation, string Name, string Identity);
-public record Caption(Source Source, long Id, bool Final, string Text, double CapturedAt,long Revision=0) {
+public record Caption(Source Source, long Id, bool Final, string Text, double CapturedAt,long Revision=0,bool Unfinished=false) {
     public string Key => $"{Source.Id}:{Source.Generation}:{Id}:{Final}";
 }
 public record SourceStatus(Source Source, string State, string Message) {
@@ -36,19 +36,21 @@ public sealed class CaptionState {
         var id = Str(s, "id", 16);
         return id is "a" or "b" or "device" ? new(id, Num(s, "generation"), Str(s, "name", 200), Str(s, "identity", 512)) : null;
     }
-    static Caption ReadCaption(JsonElement e) => new(ReadSource(e) ?? new("legacy", 0, "Playback output", "legacy"), Num(e, "id"), Flag(e, "final"), Str(e, "text"), e.TryGetProperty("capturedAt", out var time) && time.TryGetDouble(out double at) && double.IsFinite(at) ? at : 0);
+    static Caption ReadCaption(JsonElement e) => new(ReadSource(e) ?? new("legacy", 0, "Playback output", "legacy"), Num(e, "id"), Flag(e, "final"), HistoryPolicy.Limit(Str(e, "text",HistoryPolicy.TextLimit+1)), e.TryGetProperty("capturedAt", out var time) && time.TryGetDouble(out double at) && double.IsFinite(at) ? at : 0,Num(e,"revision"),Flag(e,"unfinished"));
     static List<Choice> Choices(JsonElement e, string name) => e.TryGetProperty(name, out var list) && list.ValueKind == JsonValueKind.Array
         ? list.EnumerateArray().Take(512).Select(x => new Choice(Str(x, "id", 512), Str(x, "name", 200) + (name == "apps" && Num(x, "pid") > 0 ? $" (PID {Num(x, "pid")})" : ""))).ToList() : [];
     bool Obsolete(Source s) => Sources.TryGetValue(s.Id,out var active)&&active.Source.Generation==s.Generation&&active.Source.Identity!=s.Identity || generations.GetValueOrDefault(s.Id) > s.Generation || (removed.Contains(s.Id) && generations.GetValueOrDefault(s.Id) >= s.Generation);
     void Track(Source s) {
         if (generations.GetValueOrDefault(s.Id) < s.Generation) {
+            if(Sources.TryGetValue(s.Id,out var previous)&&previous.Source.Identity==s.Identity&&Partials.TryGetValue(s.Id,out var draft))Retain(draft with{Final=false,Unfinished=true});
             Partials.Remove(s.Id);AudioLevels.Remove(s.Id); ledgers.Remove(s.Id);
             if (Sources.TryGetValue(s.Id, out var old)) { if(old.Source.Identity != s.Identity){History.RemoveAll(x => x.Source.Id == s.Id);Sources.Remove(s.Id);}else Sources[s.Id]=old with{Source=s}; }
         }
         generations[s.Id] = s.Generation; removed.Remove(s.Id);
         if(!Sources.ContainsKey(s.Id))Sources[s.Id]=new(s,"waiting","Waiting for audio");
     }
-    void Trim() { var ordered = History.OrderBy(c => c.CapturedAt).TakeLast(30).ToArray(); History.Clear(); History.AddRange(ordered); }
+    void Trim() { var ordered=HistoryPolicy.Trim(History);History.Clear();History.AddRange(ordered); }
+    void Retain(Caption caption){History.RemoveAll(c=>CaptionPresentation.RowKey(c)==CaptionPresentation.RowKey(caption));History.Add(caption);Trim();}
     public void Apply(string json) { using var doc = JsonDocument.Parse(json); Apply(doc.RootElement); }
     void Apply(JsonElement e) {
         string type = Str(e, "type", 40);
@@ -61,7 +63,7 @@ public sealed class CaptionState {
                 // Old finalized conversation may survive capture resets, but never a replaced application.
                 if (c.Source.Id != "legacy" && (!Sources.TryGetValue(c.Source.Id, out var active) || active.Source.Identity != c.Source.Identity || c.Source.Generation > active.Source.Generation)) continue;
                 if (!History.Any(x => x.Key == c.Key)) History.Add(c);
-                if (!Obsolete(c.Source)) Ledger(c.Source.Id).Mark(c.Id,0,closed:true,cleared:true,final:true);
+                if (!Obsolete(c.Source)&&c.Final) Ledger(c.Source.Id).Mark(c.Id,0,closed:true,cleared:true,final:true);
             }
             Trim();
             if(e.TryGetProperty("epochs",out var epochs))foreach(var item in epochs.EnumerateObject()){
@@ -100,7 +102,8 @@ public sealed class CaptionState {
             if(source!=null)Track(source);
             string slot=source?.Id??"legacy";var book=Ledger(slot);long id=Num(e,"id"),revision=book.Revision(id,e);bool terminal=!e.TryGetProperty("terminal",out var end)||end.ValueKind!=JsonValueKind.False;
             book.Mark(id,revision,closed:terminal,cleared:true);
-            if(Partials.TryGetValue(slot,out var pending)&&(pending.Id<id||pending.Id==id&&(terminal||pending.Revision<=revision)))Partials.Remove(slot);
+            if(terminal&&!Flag(e,"retain"))History.RemoveAll(c=>c.Unfinished&&c.Source.Id==slot&&c.Source.Generation==(source?.Generation??0)&&c.Id==id);
+            if(Partials.TryGetValue(slot,out var pending)&&(pending.Id<id||pending.Id==id&&(terminal||pending.Revision<=revision))){if(Flag(e,"retain"))Retain(pending with{Final=false,Unfinished=true});Partials.Remove(slot);}
         }
         if (type != "caption") return;
         var caption = ReadCaption(e); var slotId = caption.Source.Id;
@@ -108,10 +111,11 @@ public sealed class CaptionState {
         var ledger=Ledger(slotId);long rev=ledger.Revision(caption.Id,e);caption=caption with{Revision=rev};
         if(!ledger.Allows(caption.Id,rev,caption.Final))return;
         if(caption.Text.Length==0){ledger.Mark(caption.Id,rev,closed:caption.Final,cleared:true);if(Partials.TryGetValue(slotId,out var old)&&(old.Id<caption.Id||old.Id==caption.Id&&old.Revision<=rev))Partials.Remove(slotId);return;}
+        if(Partials.TryGetValue(slotId,out var preceding)&&preceding.Id<caption.Id)Retain(preceding with{Final=false,Unfinished=true});
         ledger.Mark(caption.Id,rev,closed:caption.Final,cleared:caption.Final,final:caption.Final);
         if (caption.Final) {
             if (!Partials.TryGetValue(slotId, out var pending) || pending.Id <= caption.Id) Partials.Remove(slotId);
-            History.Add(caption); Trim();
-        } else if (!Partials.TryGetValue(slotId, out var pending) || pending.Id <= caption.Id) Partials[slotId] = caption;
+            Retain(caption);
+        } else if (!Partials.TryGetValue(slotId, out var pending) || pending.Id <= caption.Id) {History.RemoveAll(c=>CaptionPresentation.RowKey(c)==CaptionPresentation.RowKey(caption));Partials[slotId] = caption;}
     }
 }

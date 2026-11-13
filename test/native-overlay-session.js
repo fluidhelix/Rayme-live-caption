@@ -20,7 +20,13 @@ async function run() {
         ui.publish({type:'caption',source:a,id:3,revision:3,final:false,text:'newer A'});ui.publish({type:'segment-retired',source:a,id:2,revision:2,terminal:true});status('stage-newer-partial');
         ui.publish({type:'source-status',source:a,component:'inference',state:'unavailable',message:'Local transcription failed.'});ui.publish({type:'reset',source:a});ui.publish({type:'segment-retired',source:b,id:2,revision:2,terminal:false});status('stage-preserved-error');}
       else {ui.publish({type:'source-removed',source:a});ui.publish({type:'reset',source:next});caption(b,2,true,'B remains attributed',25);caption(next,1,false,'New application partial',30);caption(next,1,true,'New application final',30);status('stage-reconnect');}
-    },onPause:paused=>{pauses.push(paused);ui.publish({type:'paused',paused});},onConfigure:(slot,descriptor)=>{assert.equal(slot,'a');assert.equal(descriptor.id,'11:101');configured=true;status('stage-complete');}});
+    },onPause:paused=>{pauses.push(paused);ui.publish({type:'paused',paused});},onConfigure:(slot,descriptor)=>{
+      assert.equal(slot,'a');assert.equal(descriptor.id,'11:101');
+      if(configured){caption(next,237,true,'Recovered retained tail',237);status('stage-complete');return;}
+      configured=true;
+      for(let id=2;id<=236;id++){caption(next,id,true,'Synthetic A history '+id,id);caption(b,id+1,true,'Synthetic B history '+(id+1),id+1);}
+      caption(next,237,false,'Unfinished retained tail',237);ui.publish({type:'segment-retired',source:next,id:237,revision:1,terminal:false,retain:true});status('stage-retention');
+    }});
     ui.publish({type:'applications',supported:true,apps:[{kind:'process',id:'11:101',name:'New Application A',pid:11,started:'101'}]});
     for(const source of [a,b])ui.publish({type:'source-status',source,state:'capturing',message:'Synthetic protocol fixture'});
     // Exact Origin and token validation remain enabled for native connections.

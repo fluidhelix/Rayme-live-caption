@@ -18,8 +18,12 @@ public static class FlyoutPlacement {
 }
 
 // Continuous text is a presentation of the authoritative bounded segment history.
-public record Transcript(string FinalText,string PartialText,string Label,bool Live);
+public record Transcript(string FinalText,string PartialText,string Label,bool Live,bool Unfinished=false);
+public record TranscriptHeader(string Label,bool Live,bool Unfinished);
 public static class TranscriptPresentation {
+    public static TranscriptHeader Header(CaptionState state,string slot)=>new(
+        state.Sources.GetValueOrDefault(slot)?.Source.Name??state.History.LastOrDefault(c=>c.Source.Id==slot)?.Source.Name??(slot=="device"?"Windows playback":"Choose Application "+slot.ToUpperInvariant()),
+        state.Partials.TryGetValue(slot,out var partial)&&!string.IsNullOrWhiteSpace(partial.Text),state.History.Any(c=>c.Source.Id==slot&&c.Unfinished));
     public static string Finish(string text) {
         text=text.Trim();if(text.Length==0)return text;
         // Keep annotation bytes intact, including multiple trailing vocal cues.
@@ -33,16 +37,15 @@ public static class TranscriptPresentation {
         int end=spoken.Length;return text[..end]+"."+text[end..];
     }
     public static Transcript Build(CaptionState state,string slot) {
-        var finals=state.History.Where(c=>c.Source.Id==slot).OrderBy(c=>c.CapturedAt).Select(c=>Finish(c.Text));
+        var finals=state.History.Where(c=>c.Source.Id==slot&&c.Final).OrderBy(c=>c.CapturedAt).Select(c=>Finish(c.Text));
         string text=string.Join(" ",finals.Where(t=>t.Length>0));
         state.Partials.TryGetValue(slot,out var partial);
         string live=partial?.Text.Trim()??"";
-        string title=state.Sources.GetValueOrDefault(slot)?.Source.Name??state.History.LastOrDefault(c=>c.Source.Id==slot)?.Source.Name??(slot=="device"?"Windows playback":"Choose Application "+slot.ToUpperInvariant());
-        return new(text,live,title,live.Length>0);
+        var header=Header(state,slot);return new(text,live,header.Label,header.Live,header.Unfinished);
     }
     public static string[] Slots(CaptionState state)=>state.Sources.ContainsKey("device")?["device"]:new[]{"a","b"}.Where(state.Sources.ContainsKey).ToArray();
     public static TranscriptSegment[] Segments(CaptionState state,string slot){
-        var list=state.History.Where(c=>c.Source.Id==slot).OrderBy(c=>c.CapturedAt).Select(c=>new TranscriptSegment(CaptionPresentation.RowKey(c),Finish(c.Text),true)).ToList();
+        var list=state.History.Where(c=>c.Source.Id==slot).OrderBy(c=>c.CapturedAt).Select(c=>new TranscriptSegment(CaptionPresentation.RowKey(c),c.Unfinished?c.Text:Finish(c.Text),c.Final,c.Unfinished)).ToList();
         if(state.Partials.TryGetValue(slot,out var p)&&p.Text.Trim().Length>0)list.Add(new(CaptionPresentation.RowKey(p),p.Text.Trim(),false));
         return list.ToArray();
     }
@@ -52,6 +55,8 @@ public sealed class ScrollFollow {
     public bool Following { get; private set; }=true;
     public long Revision {get;private set;}
     public void ReaderMoved(double offset,double scrollable){Following=scrollable-offset<=60;Revision++;}
+    public void BeginNavigation(){Following=false;Revision++;}
+    public bool NeedsReveal(double top,double bottom,double viewport)=>Following&&double.IsFinite(top)&&double.IsFinite(bottom)&&viewport>0&&(bottom>viewport+.5||top<-.5);
 }
 public static class WindowInteraction {
     public static string LockGlyph(bool locked)=>locked?"\uE72E":"\uE785";
@@ -59,7 +64,7 @@ public static class WindowInteraction {
     public static string LockHint(bool locked)=>locked?"Position and size locked — unlock position":"Position and size unlocked — lock position";
 }
 
-public record TranscriptSegment(string Key,string Text,bool Final);
+public record TranscriptSegment(string Key,string Text,bool Final,bool Unfinished=false);
 public sealed class CaptionLayout {
     public bool Detached {get;private set;}
     public static bool CanDetach(CaptionState state)=>TranscriptPresentation.Slots(state).SequenceEqual(new[]{"a","b"});
@@ -77,9 +82,5 @@ public static class TextPosition {
         if(offset<=prefix)return Math.Min(offset,newText.Length);
         if(offset>=oldText.Length-suffix)return Math.Clamp(newText.Length-(oldText.Length-offset),0,newText.Length);
         return offset-prefix<=oldText.Length-suffix-offset?prefix:newText.Length-suffix;
-    }
-    public static bool IsAppend(IReadOnlyList<TranscriptSegment> before,IReadOnlyList<TranscriptSegment> after){
-        var previous=before.ToDictionary(x=>x.Key);
-        return after.Any(x=>!previous.TryGetValue(x.Key,out var old)||!x.Final&&!old.Final&&x.Text.Length>old.Text.Length&&x.Text.StartsWith(old.Text,StringComparison.Ordinal));
     }
 }

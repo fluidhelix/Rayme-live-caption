@@ -1,5 +1,7 @@
 # Approved overlay implementation
 
+The local caption-reading follow-up in `CAPTION_READING_REPORT.md` supersedes the append-only follow gate and the previous shared 30-segment retention policy described in this historical report. Its Windows validation remains pending; no new release is claimed here.
+
 Baseline: `d7365b23352264d51260951b34cdb21813ded10e` (`rc.41`), verified against `origin/main`. The user approved the existing design, then required neutral charcoal throughout the application and preservation of the live 16–60 text-size slider. No second mockup stage was performed. The approved reference is in `docs/APPROVED_OVERLAY_DESIGN.md`.
 
 ## Implementation

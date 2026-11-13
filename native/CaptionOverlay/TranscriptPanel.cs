@@ -22,19 +22,18 @@ internal sealed class TranscriptPanel : Border {
     ScrollFollow follow=new();
     string identity="";
     Anchor? lastAnchor,pendingAnchor;
-    bool pending,suppressScroll,settling;
-    double pendingOffset,previousExtent;
+    bool pending,settling,readerNavigating,thumbDragging,pendingReflow;
+    double pendingOffset;
     long pendingRevision;
-    bool pendingAppend;
     bool lastSetup;
     readonly bool traceEnabled;
     readonly Queue<object> geometry=[];
-    sealed record Anchor(string Key,int Index,double Y,string OldText,int Ordinal);
+    sealed record Anchor(string Key,int Index,double Y,string OldText,string[] Neighbors);
     internal string Slot {get;}
-    internal bool IsLive=>live.Visibility==Visibility.Visible;
+    internal bool IsLive=>live.Visibility==Visibility.Visible&&live.Text=="LIVE";
     internal string SourceLabel=>label.Text;
     internal string FinalText=>string.Join(" ",segments.Where(x=>x.Final).Select(x=>x.Text));
-    internal string PartialText=>string.Join(" ",segments.Where(x=>!x.Final).Select(x=>x.Text));
+    internal string PartialText=>string.Join(" ",segments.Where(x=>!x.Final&&!x.Unfinished).Select(x=>x.Text));
     internal string PlainText=>new TextRange(paragraph.ContentStart,paragraph.ContentEnd).Text;
     internal double ScrollableHeight=>Math.Max(0,Text.ExtentHeight-Text.ViewportHeight);
     internal ScrollViewer Scroll {get{Text.ApplyTemplate();return Descendant<ScrollViewer>(Text)??throw new InvalidOperationException("Transcript scroll viewer unavailable");}}
@@ -49,22 +48,42 @@ internal sealed class TranscriptPanel : Border {
         live.Visibility=Visibility.Hidden;badge.SetBinding(OpacityProperty,new System.Windows.Data.Binding("Visibility"){Source=live,Converter=new LiveOpacity()});
         DockPanel.SetDock(badge,Dock.Right);header.Children.Add(badge);label.TextWrapping=TextWrapping.NoWrap;label.TextTrimming=TextTrimming.CharacterEllipsis;label.VerticalAlignment=VerticalAlignment.Center;header.Children.Add(label);grid.Children.Add(header);
         Text.Document=new FlowDocument(paragraph){PagePadding=new(0),Foreground=Theme.Brush("#F2F2F2"),FontFamily=new FontFamily("Segoe UI Variable Text, Segoe UI")};Text.Tag=this;var menu=new ContextMenu();menu.Items.Add(new MenuItem{Header="Copy",Command=ApplicationCommands.Copy,CommandTarget=Text});menu.Items.Add(new MenuItem{Header="Select all",Command=ApplicationCommands.SelectAll,CommandTarget=Text});Text.ContextMenu=menu;Theme.Accessible(Text,slot=="device"?"Playback transcript":"Application "+slot.ToUpperInvariant()+" transcript");Text.SetResourceReference(Control.FocusVisualStyleProperty,"KeyboardFocus");
-        Text.AddHandler(ScrollViewer.ScrollChangedEvent,new ScrollChangedEventHandler((_,e)=>{
-            if(!suppressScroll&&e.ExtentHeightChange==0&&e.ViewportHeightChange==0){follow.ReaderMoved(Text.VerticalOffset,Math.Max(0,Text.ExtentHeight-Text.Document.PagePadding.Bottom-Text.ViewportHeight));lastAnchor=Capture();}
-        }));
+        // ScrollChanged is evidence of movement, never evidence of reader intent.
+        // WPF also raises it for layout, extent clamping and our own restoration.
+        Text.AddHandler(ScrollViewer.ScrollChangedEvent,new ScrollChangedEventHandler((_,_)=>{if(readerNavigating)ScheduleReaderPosition();}));
         Text.PreviewMouseWheel+=(_,_)=>ReaderNavigating();
-        Text.PreviewKeyDown+=(_,e)=>{if(e.Key is Key.Up or Key.Down or Key.PageUp or Key.PageDown or Key.Home or Key.End)ReaderNavigating();};
-        Text.PreviewMouseDown+=(_,e)=>{if(WindowDrag.Ancestor<ScrollBar>(e.OriginalSource as DependencyObject)!=null)ReaderNavigating();};
-        SizeChanged+=(_,_)=>{if(lastAnchor!=null&&!pending&&!settling)QueueRestore(lastAnchor,false,Text.VerticalOffset,Text.ExtentHeight);};
+        Text.PreviewKeyDown+=(_,e)=>{if(e.Key is Key.Up or Key.Down or Key.PageUp or Key.PageDown or Key.Home or Key.End or Key.Space)ReaderNavigating();};
+        Text.PreviewMouseDown+=(_,e)=>{if(WindowDrag.Ancestor<ScrollBar>(e.OriginalSource as DependencyObject)!=null||HasTextAt(e.GetPosition(Text)))ReaderNavigating();};
+        Text.AddHandler(Thumb.DragStartedEvent,new DragStartedEventHandler((_,_)=>{thumbDragging=true;ReaderNavigating();}));
+        Text.AddHandler(Thumb.DragCompletedEvent,new DragCompletedEventHandler((_,_)=>{thumbDragging=false;ScheduleReaderPosition();}));
+        Text.PreviewMouseUp+=(_,_)=>ScheduleReaderPosition();
+        Text.LostMouseCapture+=(_,_)=>{thumbDragging=false;ScheduleReaderPosition();};
+        SizeChanged+=(_,_)=>{if(!settling)QueueRestore(lastAnchor,Text.VerticalOffset,true);};
+        Loaded+=(_,_)=>QueueRestore(lastAnchor,Text.VerticalOffset,true);
+        Unloaded+=(_,_)=>{readerNavigating=thumbDragging=false;navigationTicket++;};
+        IsVisibleChanged+=(_,_)=>{if(IsVisible)QueueRestore(lastAnchor,Text.VerticalOffset,true);};
         Grid.SetRow(Text,1);grid.Children.Add(Text);Child=grid;
     }
     sealed class LiveOpacity:System.Windows.Data.IValueConverter {
         public object Convert(object value,Type t,object p,System.Globalization.CultureInfo c)=>value is Visibility.Visible?1d:0d;
         public object ConvertBack(object v,Type t,object p,System.Globalization.CultureInfo c)=>throw new NotSupportedException();
     }
-    void ReaderNavigating(){follow.ReaderMoved(Text.VerticalOffset,Math.Max(0,Text.ExtentHeight-Text.Document.PagePadding.Bottom-Text.ViewportHeight));suppressScroll=false;}
+    internal bool Following=>follow.Following;
+    long navigationTicket;
+    internal void ReaderNavigating(){readerNavigating=true;follow.BeginNavigation();ScheduleReaderPosition();}
+    void ScheduleReaderPosition(){
+        if(!readerNavigating)return;
+        long ticket=++navigationTicket;
+        Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle,new Action(()=>{
+            if(ticket!=navigationTicket||!IsLoaded)return;
+            // A held thumb or text-selection drag may keep moving between events.
+            follow.ReaderMoved(Text.VerticalOffset,Math.Max(0,Text.ExtentHeight-Text.Document.PagePadding.Bottom-Text.ViewportHeight));lastAnchor=Capture();
+            if(!thumbDragging&&(Mouse.LeftButton!=MouseButtonState.Pressed||!Text.IsMouseCaptureWithin))readerNavigating=false;
+            if(follow.Following&&!readerNavigating)QueueRestore(lastAnchor,Text.VerticalOffset,true);
+        }));
+    }
     Anchor? Capture(){
-        if(!IsLoaded||runs.Count==0)return null;
+        if(!IsLoaded||!IsVisible||runs.Count==0)return null;
         try{
             var position=Text.GetPositionFromPoint(new Point(2,2),true);if(position==null)return null;
             var ordered=paragraph.Inlines.OfType<Run>().ToArray();
@@ -72,7 +91,7 @@ internal sealed class TranscriptPanel : Border {
                 var run=ordered[i];if(position.CompareTo(run.ContentEnd)>0)continue;
                 int offset=Math.Clamp(run.ContentStart.GetOffsetToPosition(position),0,run.Text.Length);var point=run.ContentStart.GetPositionAtOffset(offset)??run.ContentStart;
                 var rect=point.GetCharacterRect(LogicalDirection.Forward);if(rect.IsEmpty)return null;
-                return new((string)run.Tag,offset,rect.Top,run.Text,i);
+                return new((string)run.Tag,offset,rect.Top,run.Text,ordered.Skip(i+1).Concat(ordered.Take(i).Reverse()).Select(r=>(string)r.Tag).ToArray());
             }
         }catch(InvalidOperationException){}
         return null;
@@ -82,46 +101,62 @@ internal sealed class TranscriptPanel : Border {
         if(runs.TryGetValue(anchor.Key,out var run)){int index=TextPosition.Map(anchor.OldText,run.Text,anchor.Index);return run.ContentStart.GetPositionAtOffset(index)??run.ContentStart;}
         // History trimming or retirement may remove the anchor. Use a surviving
         // neighboring segment, without retaining canceled transcript bytes.
-        var values=paragraph.Inlines.OfType<Run>().ToArray();return values[Math.Clamp(anchor.Ordinal,0,values.Length-1)].ContentStart;
+        foreach(string key in anchor.Neighbors)if(runs.TryGetValue(key,out var neighbor))return neighbor.ContentStart;
+        return paragraph.Inlines.OfType<Run>().FirstOrDefault()?.ContentStart;
     }
-    void QueueRestore(Anchor? anchor,bool append,double offset,double extent){
-        if(!pending){pendingAnchor=anchor;pendingOffset=offset;previousExtent=extent;pendingRevision=follow.Revision;pendingAppend=append;pending=true;
-            Dispatcher.BeginInvoke(DispatcherPriority.Loaded,new Action(Settle));
-        }else pendingAppend|=append;
+    void QueueRestore(Anchor? anchor,double offset,bool reflow=false){
+        if(pending){pendingReflow|=reflow;return;}
+        pendingReflow=reflow;
+        pendingAnchor=anchor;pendingOffset=offset;pendingRevision=follow.Revision;pending=true;
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded,new Action(Settle));
     }
     void Settle(){
         if(!pending)return;pending=false;
-        if(!IsLoaded){suppressScroll=false;return;}
-        if(follow.Revision!=pendingRevision){Text.Document.PagePadding=new(0);return;}
-        settling=true;suppressScroll=true;Text.UpdateLayout();
-        if(pendingAppend&&follow.Following){Text.Document.PagePadding=new(0);Text.UpdateLayout();Text.ScrollToEnd();}
-        else{
-            var point=Resolve(pendingAnchor);double target=pendingOffset;
-            if(point!=null){var rect=point.GetCharacterRect(LogicalDirection.Forward);if(!rect.IsEmpty)target=Text.VerticalOffset+rect.Top-(pendingAnchor?.Y??rect.Top);}
-            target=Math.Max(0,target);
-            double natural=Math.Max(0,Text.ExtentHeight-Text.Document.PagePadding.Bottom);
-            double cushion=Math.Max(0,target+Text.ViewportHeight-natural);
-            Text.Document.PagePadding=new Thickness(0,0,0,Math.Min(cushion,Math.Max(previousExtent,Text.ViewportHeight)));
-            Text.UpdateLayout();Text.ScrollToVerticalOffset(target);
-        }
-        Trace("settled");pendingAnchor=null;settling=false;
-        Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle,new Action(()=>{suppressScroll=false;lastAnchor=Capture();}));
+        if(!IsLoaded||!IsVisible||readerNavigating||follow.Revision!=pendingRevision)return;
+        settling=true;
+        try{
+            Text.UpdateLayout();
+            if(follow.Following){
+                if(pendingReflow){Text.Document.PagePadding=new(0);Text.UpdateLayout();}
+                else RestoreAnchor();
+                var end=paragraph.Inlines.OfType<Run>().LastOrDefault()?.ContentEnd;
+                var rect=end?.GetCharacterRect(LogicalDirection.Backward);
+                // Revisions need not be prefix appends. Only move when the actual
+                // latest line is outside the viewport, not on status/LIVE changes.
+                if(rect is {} r&&!r.IsEmpty&&follow.NeedsReveal(r.Top,r.Bottom,Text.ViewportHeight)){
+                    Text.Document.PagePadding=new(0);Text.UpdateLayout();
+                    rect=end?.GetCharacterRect(LogicalDirection.Backward);
+                    if(rect is {} latest&&!latest.IsEmpty)Text.ScrollToVerticalOffset(Math.Clamp(Text.VerticalOffset+latest.Bottom-Text.ViewportHeight,0,ScrollableHeight));
+                }
+            }else RestoreAnchor();
+            Text.UpdateLayout();
+            Trace("settled");lastAnchor=Capture();pendingAnchor=null;
+        }finally{settling=false;}
     }
-    internal void PrepareMove(){lastAnchor=Capture()??lastAnchor;QueueRestore(lastAnchor,false,Text.VerticalOffset,Text.ExtentHeight);}
+    void RestoreAnchor(){
+        var point=Resolve(pendingAnchor);double target=pendingOffset;
+        if(point!=null){var rect=point.GetCharacterRect(LogicalDirection.Forward);if(!rect.IsEmpty)target=Text.VerticalOffset+rect.Top-(pendingAnchor?.Y??rect.Top);}
+        target=Math.Max(0,target);
+        double natural=Math.Max(0,Text.ExtentHeight-Text.Document.PagePadding.Bottom);
+        // At most one viewport of end slack, never multiple blank pages. This is
+        // released on live growth, reader return to bottom and following reflow.
+        double cushion=pendingAnchor==null?0:Math.Clamp(target+Text.ViewportHeight-natural,0,Text.ViewportHeight);
+        Text.Document.PagePadding=new Thickness(0,0,0,cushion);Text.UpdateLayout();Text.ScrollToVerticalOffset(Math.Min(target,ScrollableHeight));
+    }
+    internal void PrepareMove(){lastAnchor=Capture()??lastAnchor;QueueRestore(lastAnchor,Text.VerticalOffset);}
     internal void Interactions(bool locked){Cursor=locked?Cursors.Arrow:Cursors.SizeAll;Text.Cursor=Cursors.IBeam;}
     internal void Update(CaptionState state,double size,string color,bool setup){
-        var projection=TranscriptPresentation.Build(state,Slot);Theme.Accessible(Text,projection.Label+" transcript");label.Text=projection.Label;label.ToolTip=projection.Label;label.Foreground=Theme.Brush(color);live.Visibility=projection.Live?Visibility.Visible:Visibility.Hidden;
+        var projection=TranscriptPresentation.Header(state,Slot);Theme.Accessible(Text,projection.Label+" transcript");label.Text=projection.Label;label.ToolTip=projection.Label;label.Foreground=Theme.Brush(color);live.Text=projection.Live?"LIVE":"DRAFT";live.ToolTip=projection.Live?"Recognition is updating":"Underlined text is unfinished recognition retained for reading, not a verified final.";live.Visibility=projection.Live||projection.Unfinished?Visibility.Visible:Visibility.Hidden;
         var next=TranscriptPresentation.Segments(state,Slot);
         string nextIdentity=state.Sources.GetValueOrDefault(Slot)?.Source.Identity??"";
-        if(identity!=nextIdentity){identity=nextIdentity;lastAnchor=pendingAnchor=null;follow=new();pending=false;Text.Document.PagePadding=new(0);Text.ScrollToHome();}
-        bool changed=!segments.SequenceEqual(next)||Text.FontSize!=size||next.Length==0&&lastSetup!=setup;
+        bool resetView=identity!=nextIdentity||segments.Length>0&&next.Length==0;
+        if(resetView){identity=nextIdentity;lastAnchor=pendingAnchor=null;follow=new();pending=false;readerNavigating=thumbDragging=false;navigationTicket++;Text.Document.PagePadding=new(0);Text.ScrollToHome();}
+        bool fontChanged=Text.FontSize!=size;
+        bool changed=!segments.SequenceEqual(next)||fontChanged||next.Length==0&&lastSetup!=setup;
+        bool geometryChanged=fontChanged||!segments.Select(s=>(s.Key,s.Text)).SequenceEqual(next.Select(s=>(s.Key,s.Text)))||next.Length==0&&lastSetup!=setup;
         if(!changed)return;
-        var anchor=pending?pendingAnchor:Capture();double offset=Text.VerticalOffset,extent=Text.ExtentHeight;
-        bool append=TextPosition.IsAppend(segments,next);
-        Trace("before-update");suppressScroll=true;
-        // Reserve enough end space BEFORE mutation to prevent offset clamping.
-        // Settle reduces it to the exact space needed by the surviving text anchor.
-        Text.Document.PagePadding=new Thickness(0,0,0,Math.Max(Text.ViewportHeight,offset+Text.ViewportHeight));
+        var anchor=resetView?null:pending?pendingAnchor:Capture()??lastAnchor;double offset=resetView?0:Text.VerticalOffset;
+        Trace("before-update");
         Text.BeginChange();
         try{
             var keys=next.Select(s=>s.Key).ToHashSet();foreach(var key in runs.Keys.Where(k=>!keys.Contains(k)).ToArray()){paragraph.Inlines.Remove(runs[key]);runs.Remove(key);}
@@ -130,6 +165,7 @@ internal sealed class TranscriptPanel : Border {
             for(int i=0;i<next.Length;i++){
                 var segment=next[i];if(!runs.TryGetValue(segment.Key,out var run)){run=new Run{Tag=segment.Key};runs[segment.Key]=run;}
                 string value=(i>0?" ":"")+segment.Text;if(run.Text!=value)run.Text=value;
+                run.ToolTip=segment.Unfinished?"Unfinished recognition retained for reading; not a verified final.":null;run.TextDecorations=segment.Unfinished?TextDecorations.Underline:null;
                 Inline? desired=preceding==null?paragraph.Inlines.FirstInline:preceding.NextInline;
                 if(!ReferenceEquals(desired,run)){if(run.Parent!=null)paragraph.Inlines.Remove(run);if(preceding==null){if(paragraph.Inlines.FirstInline is {} first)paragraph.Inlines.InsertBefore(first,run);else paragraph.Inlines.Add(run);}else paragraph.Inlines.InsertAfter(preceding,run);}
                 preceding=run;
@@ -138,7 +174,7 @@ internal sealed class TranscriptPanel : Border {
             Text.FontSize=size;Text.Document.FontSize=size;paragraph.LineHeight=size*1.4;paragraph.LineStackingStrategy=LineStackingStrategy.BlockLineHeight;
             segments=next;lastSetup=setup;
         }finally{Text.EndChange();}
-        QueueRestore(anchor,append,offset,extent);
+        if(geometryChanged)QueueRestore(anchor,offset,fontChanged||resetView);
     }
     internal bool HasTextAt(Point point){
         // Leave text, inter-word whitespace and a short trailing selection area to
@@ -149,7 +185,8 @@ internal sealed class TranscriptPanel : Border {
         var left=start.GetCharacterRect(LogicalDirection.Forward);var right=end.GetCharacterRect(LogicalDirection.Backward);
         return !left.IsEmpty&&!right.IsEmpty&&point.Y>=left.Top&&point.Y<=left.Bottom&&point.X<=right.Right+Text.FontSize*2;
     }
-    void Trace(string reason){if(!traceEnabled)return;geometry.Enqueue(new{reason,slot=Slot,offset=Text.VerticalOffset,extent=Text.ExtentHeight,viewport=Text.ViewportHeight,width=Text.ViewportWidth,following=follow.Following});while(geometry.Count>128)geometry.Dequeue();}
+    void Trace(string reason){if(!traceEnabled)return;geometry.Enqueue(new{reason,slot=Slot,offset=Text.VerticalOffset,extent=Text.ExtentHeight,viewport=Text.ViewportHeight,width=Text.ViewportWidth,padding=Text.Document.PagePadding.Bottom,count=segments.Length,following=follow.Following});while(geometry.Count>128)geometry.Dequeue();}
+    internal bool LatestVisible(){var rect=paragraph.Inlines.OfType<Run>().LastOrDefault()?.ContentEnd.GetCharacterRect(LogicalDirection.Backward);return rect is {} r&&!r.IsEmpty&&r.Top>=-1&&r.Bottom<=Text.ViewportHeight+1;}
     internal (string Key,int Index,double Y)? ReadingMark(){var a=Capture();return a==null?null:(a.Key,a.Index,a.Y);}
     internal double? MarkY(string key,int index){if(!runs.TryGetValue(key,out var run))return null;var p=run.ContentStart.GetPositionAtOffset(Math.Clamp(index,0,run.Text.Length));var r=p?.GetCharacterRect(LogicalDirection.Forward);return r is {} rect&&!rect.IsEmpty?rect.Top:null;}
     internal object[] Geometry()=>geometry.ToArray();

@@ -37,7 +37,8 @@ test('fake clock: stale backlogs are pruned for both sources while fresh finals 
 test('fake clock: a visible partial expires during stalled inference; a fresh later final remains valid',async()=>{
  const ui=await createUI({port:0}),f=fixture(ui);try{f.q.add(A,f.job(1,false));f.calls.shift().resolve('unfinished');await tick();assert.ok(ui.state.partials.a);
  f.q.add(B,f.job(1));f.clock.advance(1001);assert.equal(ui.state.partials.a,undefined);assert.ok(f.events.some(e=>e.type==='segment-retired'&&e.source.id==='a'&&!e.terminal));
- f.calls.shift().resolve('B stale');await tick();f.q.add(A,f.job(1));f.calls.shift().resolve('A complete');await tick();assert.equal(ui.state.history[0].text,'A complete');assert.equal(f.clock.timers.size,0);
+ assert.equal(ui.state.history[0].text,'unfinished');assert.equal(ui.state.history[0].unfinished,true);assert.equal(ui.state.history[0].final,false);
+ f.calls.shift().resolve('B stale');await tick();f.q.add(A,f.job(1));f.calls.shift().resolve('A complete');await tick();assert.equal(ui.state.history.length,1);assert.equal(ui.state.history[0].text,'A complete');assert.equal(ui.state.history[0].unfinished,undefined);assert.equal(f.clock.timers.size,0);
  }finally{f.q.close();await ui.close();}
 });
 function tone(ms,value=1000){const b=Buffer.alloc(ms*32);for(let i=0;i<b.length;i+=2)b.writeInt16LE(value,i);return b;}
@@ -52,9 +53,9 @@ test('inference failure stays visible through reset and capture readiness, until
  const ui=await createUI({port:0}),f=fixture(ui);try{ui.publish({type:'source-status',source:A,component:'capture',state:'waiting',message:'Capture active',recovered:true});
  f.q.add(A,f.job(1,false));f.calls.shift().resolve('draft');await tick();f.q.add(A,f.job(1,false));f.calls.shift().reject(Error('failure'));await tick();assert.equal(ui.state.partials.a,undefined);assert.equal(ui.state.sources.a.state,'unavailable');
  ui.publish({type:'reset',source:A});ui.publish({type:'source-status',source:A,component:'capture',state:'waiting',message:'Listening',recovered:true});assert.equal(ui.state.sources.a.state,'unavailable');assert.match(ui.state.sources.a.message,/failed/);
- f.q.add(A,f.job(1));assert.equal(ui.state.sources.a.state,'recovering');assert.match(ui.state.sources.a.message,/failed/);f.calls.shift().resolve('');await tick();assert.equal(ui.state.partials.a,undefined);assert.equal(ui.state.sources.a.state,'waiting');assert.equal(ui.state.history.length,0);
+ f.q.add(A,f.job(1));assert.equal(ui.state.sources.a.state,'recovering');assert.match(ui.state.sources.a.message,/failed/);f.calls.shift().resolve('');await tick();assert.equal(ui.state.partials.a,undefined);assert.equal(ui.state.sources.a.state,'waiting');assert.equal(ui.state.history.length,1);assert.equal(ui.state.history[0].text,'draft');assert.equal(ui.state.history[0].unfinished,true);assert.equal(ui.state.history[0].final,false);
  f.q.add(A,f.job(2,false));f.calls.shift().resolve('draft two');await tick();f.q.add(A,f.job(2,false));f.calls.shift().resolve(' ');await tick();assert.equal(ui.state.partials.a,undefined);
- f.q.add(A,f.job(2));f.calls.shift().resolve('final two');await tick();assert.equal(ui.state.history[0].text,'final two');
+ f.q.add(A,f.job(2));f.calls.shift().resolve('final two');await tick();assert.equal(ui.state.history.length,2);assert.equal(ui.state.history[1].text,'final two');assert.equal(ui.state.history[1].final,true);
  }finally{f.q.close();await ui.close();}
 });
 test('pause/resume rejects callbacks from the old worker; removal invalidates active inference',async()=>{
@@ -70,8 +71,8 @@ test('retirements and out-of-order finals cannot erase newer partials or finaliz
  caption(A,1,1,false,'old');caption(A,2,2,false,'new');ui.publish({type:'segment-retired',source:A,id:1,revision:1,terminal:true});assert.equal(ui.state.partials.a.text,'new');
  ui.publish({type:'segment-retired',source:A,id:2,revision:1,terminal:false});assert.equal(ui.state.partials.a.text,'new');ui.publish({type:'segment-retired',source:A,id:2,revision:3,terminal:false});assert.equal(ui.state.partials.a,undefined);
  caption(A,1,99,false,'obsolete older segment');caption(A,2,2,false,'obsolete revision');assert.equal(ui.state.partials.a,undefined);caption(A,2,4,false,'fresh revision');assert.equal(ui.state.partials.a.text,'fresh revision');
- caption(B,1,1,true,'B final');caption(A,4,6,true,'four');caption(A,3,5,true,'three');assert.deepEqual(ui.state.history.map(c=>c.text),['B final','three','four']);caption(A,4,100,true,'duplicate');assert.equal(ui.state.history.length,3);
- ui.publish({type:'segment-retired',source:A,id:4,revision:100,terminal:true});assert.equal(ui.state.history.length,3);
+ caption(B,1,1,true,'B final');caption(A,4,6,true,'four');caption(A,3,5,true,'three');assert.deepEqual(ui.state.history.filter(c=>c.final).map(c=>c.text),['B final','three','four']);assert.deepEqual(ui.state.history.filter(c=>c.unfinished).map(c=>c.text),['fresh revision']);caption(A,4,100,true,'duplicate');assert.equal(ui.state.history.length,4);
+ ui.publish({type:'segment-retired',source:A,id:4,revision:100,terminal:true});assert.equal(ui.state.history.length,4);assert.equal(ui.state.history.filter(c=>c.final).length,3);
  ui.publish({type:'source-removed',source:A});caption(A,5,101,false,'removed');ui.publish({type:'source-status',source:A,state:'capturing',message:'old ready'});assert.equal(ui.state.sources.a,undefined);assert.equal(ui.state.partials.a,undefined);assert.equal(ui.state.history[0].text,'B final');
  }finally{await ui.close();}
 });

@@ -12,6 +12,7 @@ static class Program {
     }
     static void UnitTests() {
         ApprovedDesignTests();
+        ReadingTests();
         LifecycleTests();
         UsabilityTests();
         var s = new CaptionState(); s.Apply(Event("reset",A)); s.Apply(Event("reset",B));
@@ -30,7 +31,7 @@ static class Program {
         s.Apply(Event("caption",replacement,1,true)); Check(s.History.Any(x => x.Source == replacement && x.Id == 1),"Replacement segment IDs restart safely");
         s.Apply("""{"type":"paused","paused":true}"""); Check(s.Paused,"Pause state"); s.Apply("""{"type":"paused","paused":false}"""); Check(!s.Paused,"Resume state");
         s.Apply("""{"type":"cleared"}"""); Check(s.History.Count == 0 && s.Partials.Count == 0,"Clear removes all displayed conversation");
-        for (int i=2;i<=50;i++) s.Apply(Event("caption",replacement,i,true,capturedAt:i)); Check(s.History.Count == 30 && s.History[0].Id == 21,"History bounded to backend's 30 rows");
+        for (int i=2;i<=250;i++) s.Apply(Event("caption",replacement,i,true,capturedAt:i)); Check(s.History.Count == 200 && s.History[0].Id == 51,"History bounded to 200 rows per source");
         string snapshot = JsonSerializer.Serialize(new { type = "snapshot", status = "Ready", paused = false, history = new[] { JsonSerializer.Deserialize<JsonElement>(Event("caption",replacement,50,true)), JsonSerializer.Deserialize<JsonElement>(Event("caption",A,1,true)) }, sources = new { a = JsonSerializer.Deserialize<JsonElement>(Event("source-status",replacement)) }, partials = new { }, devices = new object[0], apps = new object[0] });
         s.Apply(snapshot); s.Apply(snapshot); Check(s.History.Count == 1 && s.History[0].Source == replacement,"Authoritative reconnect snapshot replaces state and drops replaced identities");
         s.Apply("""{"type":"snapshot","history":[],"sources":{},"partials":{},"devices":[],"apps":[],"paused":true}"""); Check(s.History.Count == 0 && s.Paused,"Snapshot after clear never resurrects captions");
@@ -99,9 +100,44 @@ static class Program {
         Check(SourceColor.ContrastOnBlack("#000000")==1&&SourceColor.ContrastOnBlack("#FFFFFF")>20,"Color-picker contrast warning uses actual contrast");
         Check(TextPosition.Map("hello old ending","hello corrected ending",3)==3,"Reading anchors in unchanged prefix remain stable");
         Check(TextPosition.Map("hello old ending","hello corrected ending",12)==18,"Reading anchors in unchanged suffix follow final correction");
-        var draft=new TranscriptSegment("a:1:1","early words",false);Check(!TextPosition.IsAppend(new[]{draft},new[]{draft with{Text="Correct words.",Final=true}}),"Final corrections are not append-follow commands");
-        Check(TextPosition.IsAppend(new[]{draft},new[]{draft with{Text="early words continue"}}),"Growing partials can follow new speech");
-        Check(!TextPosition.IsAppend(new[]{draft},new[]{draft})&&!TextPosition.IsAppend(new[]{draft},Array.Empty<TranscriptSegment>()),"Status and retirement cannot request bottom follow");
+        // Reproduce the removed append-only rule: Whisper can revise the prefix
+        // and add words, which still requires reveal when its tail is obscured.
+        string draft="early words",corrected="Corrected earlier words continue";
+        Check(!corrected.StartsWith(draft,StringComparison.Ordinal)&&new ScrollFollow().NeedsReveal(220,250,200),"A non-prefix correction must not inherit the old append-only follow gate");
+
+    }
+    static void ReadingTests(){
+        Check(HistoryPolicy.Limit(new string('x',3999)+"😀")==new string('x',3999)&&HistoryPolicy.Limit("text 😀")=="text 😀","Native text bound never splits a Unicode surrogate pair");
+        var s=new CaptionState();var device=new Source("device",3,"Playback","default");
+        foreach(var source in new[]{A,B,device})for(int id=1;id<=235;id++)s.Apply(Event("caption",source,id,true,capturedAt:id));
+        foreach(var source in new[]{A,B,device}){var h=s.History.Where(c=>c.Source.Id==source.Id).ToArray();Check(h.Length==200&&h[0].Id==36,"Each source independently retains 200 segments");}
+        var before=s.History.ToArray();for(int i=0;i<1000;i++)s.Apply(JsonSerializer.Serialize(new{type="source-status",source=new{id=A.Id,generation=A.Generation,name=A.Name,identity=A.Identity},state="waiting",message="Silence"}));
+        Check(s.History.SequenceEqual(before),"Prolonged silence/status changes cannot expire finalized native history");
+        for(int id=236;id<=260;id++)s.Apply(Event("caption",A,id,true,new string('x',4000),id));
+        Check(s.History.Count(c=>c.Source.Id=="a")==16&&s.History.Where(c=>c.Source.Id=="a").Sum(c=>c.Text.Length)<=HistoryPolicy.Characters,"Native text-character budget bounds long segments");
+        for(int id=261;id<=285;id++)s.Apply(Event("caption",A,id,true,new string('\u0001',4000),id));
+        Check(s.History.Count(c=>c.Source.Id=="a")==5&&s.History.Where(c=>c.Source.Id=="a").Sum(HistoryPolicy.Cost)<=HistoryPolicy.Bytes,"Native encoded-byte budget matches shared escaped-text accounting");
+        Check(s.History.Count(c=>c.Source.Id=="b")==200&&s.History.Count(c=>c.Source.Id=="device")==200,"A's cleanup cannot evict B or device history");
+        s=new CaptionState();
+        string Retire(long id,long revision,bool terminal=false)=>JsonSerializer.Serialize(new{type="segment-retired",source=new{id=A.Id,generation=A.Generation,name=A.Name,identity=A.Identity},id,revision,terminal,retain=true});
+        s.Apply(Event("caption",A,1,false,"Unverified words"));s.Apply(Retire(1,1));
+        Check(s.Partials.Count==0&&s.History.Single() is {Final:false,Unfinished:true,Text:"Unverified words"},"Retirement retains the actual draft without declaring it final");
+        var segment=TranscriptPresentation.Segments(s,"a").Single();Check(segment.Unfinished&&!segment.Final&&segment.Text=="Unverified words","Retained draft receives no invented final punctuation");
+        Check(TranscriptPresentation.Build(s,"a") is{Live:false,Unfinished:true},"DRAFT presentation is distinct from live and verified final speech");
+        Check(TranscriptPresentation.Build(s,"a").FinalText.Length==0,"Retained unfinished text is never exposed as verified FinalText");
+        s.Apply("""{"type":"caption","source":{"id":"a","generation":1,"name":"Browser A","identity":"10:100"},"id":1,"revision":1,"text":"old","final":false}""");Check(s.Partials.Count==0,"Old expired revision cannot revive live text");
+        s.Apply(Event("caption",A,1,true,"Correct final"));Check(s.History.Count==1&&s.History[0].Final&&!s.History[0].Unfinished&&CaptionPresentation.RowKey(s.History[0])==segment.Key,"Fresh final replaces the retained draft under the same visual identity");
+        s.Apply(Event("caption",A,2,false,"Clear me"));s.Apply("""{"type":"cleared"}""");s.Apply(Retire(2,2));Check(s.History.Count==0&&s.Partials.Count==0,"Late expiration cannot reconstruct explicitly cleared native text");
+        s.Apply(Event("caption",A,3,false,"Snapshot draft"));s.Apply(Retire(3,3));
+        var origin=new{id=A.Id,generation=A.Generation,name=A.Name,identity=A.Identity};
+        string snapshot=JsonSerializer.Serialize(new{type="snapshot",sources=new{a=new{type="source-status",source=origin,state="delayed",message="Recognition unfinished"}},history=new[]{new{source=origin,id=3,revision=1,final=false,unfinished=true,text="Snapshot draft",capturedAt=3}},partials=new{},devices=Array.Empty<object>(),apps=Array.Empty<object>()});
+        s.Apply(snapshot);Check(s.History.Single().Unfinished&&!s.History[0].Final,"Reconnect preserves unfinished classification");s.Apply(Event("caption",A,3,true,"Recovered final"));Check(s.History.Count==1&&s.History[0].Final,"Snapshot draft does not falsely close a segment awaiting a fresh final");
+        s.Apply(Event("caption",A,4,false,"Draft before restart"));s.Apply(Event("reset",A with{Generation=4}));Check(s.History.Count==2&&s.History[1].Unfinished&&s.Partials.Count==0,"Same-application capture reset retains the old draft as unfinished history");s.Apply(Event("caption",A,4,true,"Old generation"));Check(s.History[1].Text=="Draft before restart","Old generation cannot replace retained history or revive live speech");
+        var follow=new ScrollFollow();var other=new ScrollFollow();
+        foreach(string change in new[]{"prefix extension","non-prefix revision with new words","shorter correction","partial-to-final"}){Check(follow.NeedsReveal(220,250,200),"Following reveals an obscured latest line for "+change);Check(!follow.NeedsReveal(170,195,200),"Already visible latest line needs no scroll for "+change);}
+        long ticket=follow.Revision;follow.BeginNavigation();Check(!follow.Following&&follow.Revision>ticket,"Explicit reader input invalidates scheduled following before scroll events arrive");follow.ReaderMoved(0,500);Check(!follow.NeedsReveal(220,250,200)&&other.Following,"Manual rereading blocks follow independently of the other source");
+        follow.ReaderMoved(500,500);Check(follow.NeedsReveal(220,250,200),"Manual return to the bottom resumes following");
+        Check(!follow.NeedsReveal(double.NaN,250,200)&&!follow.NeedsReveal(0,0,0),"Unmeasured layout cannot request a spurious scroll");
     }
     static void UsabilityTests(){
         foreach(var (input,expected) in new[]{("Hello","Hello."),("Why?","Why?"),("Yes!","Yes!"),("Already.","Already."),("[laughter]","[laughter]"),("*sighing*","*sighing*"),("  More words  ","More words."),("He said “yes”","He said “yes.”"),("你好。","你好。"),("",""),("Wait…","Wait…"),("Continuing,","Continuing,"),("Listen:","Listen:"),("unfinished —","unfinished —"),("Hello [laughter]","Hello. [laughter]"),("Why? *sighing*","Why? *sighing*"),("[laughter] *sighing*","[laughter] *sighing*")})Check(TranscriptPresentation.Finish(input)==expected,"Natural final punctuation: "+input);
@@ -165,7 +201,8 @@ static class Program {
             if (type == "snapshot") {
                 snapshots++;
                 if (snapshots == 1) { Check(s.Sources.Count == 2 && s.ProcessSupported,"Authenticated initial snapshot"); Check(await client.SendAsync(new { type="refresh" }),"Refresh command sent"); }
-                else { Check(s.History.Count == 2 && s.History.Select(x=>x.Key).Distinct().Count()==2,"Reconnect snapshot does not duplicate finals or restore replaced sources"); await client.SendAsync(new {type="pause",paused=false}); }
+                else if(snapshots==2) { Check(s.History.Count == 2 && s.History.Select(x=>x.Key).Distinct().Count()==2,"Reconnect snapshot does not duplicate finals or restore replaced sources"); await client.SendAsync(new {type="pause",paused=false}); }
+                else {Check(s.History.Count==400&&s.History.Count(c=>c.Source.Id=="a")==200&&s.History.Count(c=>c.Source.Id=="b")==200,"Authenticated large reconnect snapshot obeys independent retention budgets");Check(s.History.Single(c=>c.Source.Id=="a"&&c.Id==237) is{Unfinished:true,Final:false}&&s.Partials.Count==0,"Large native snapshot preserves unfinished classification and retirement guards");await client.SendAsync(new{type="configure",slot="a",id="11:101",enabled=true});}
             }
             if (type == "status" && doc.RootElement.GetProperty("message").GetString() == "stage-captions") {
                 Check(s.History.Count == 2 && s.Partials.Count == 0 && s.History[0].Source.Id == "a","Interleaved live partials and finals over real WebSocket");
@@ -180,7 +217,8 @@ static class Program {
             }
             if (type == "cleared") { Check(s.History.Count==0 && s.Partials.Count==0,"Clear broadcast through production server"); await client.SendAsync(new {type="refresh"}); }
             if (type == "status" && doc.RootElement.GetProperty("message").GetString() == "stage-reconnect" && !reconnect) { reconnect=true; client.Reconnect(); }
-            if (type == "status" && doc.RootElement.GetProperty("message").GetString() == "stage-complete") { Check(snapshots==2,"Exactly one reconnect"); done.TrySetResult(); }
+            if(type=="status"&&doc.RootElement.GetProperty("message").GetString()=="stage-retention"){Check(s.History.Count==400&&s.History.Single(c=>c.Source.Id=="a"&&c.Id==237).Unfinished,"Live backend/native history budgets and retained drafts agree before reconnect");client.Reconnect();}
+            if (type == "status" && doc.RootElement.GetProperty("message").GetString() == "stage-complete") { Check(snapshots==3,"Exactly two requested reconnects");Check(s.History.Count==400&&s.History.Single(c=>c.Source.Id=="a"&&c.Id==237) is{Final:true,Unfinished:false},"Fresh final replaces a retained snapshot draft without duplicating native history");done.TrySetResult(); }
         }, _ => Task.CompletedTask);
         var winner = await Task.WhenAny(done.Task,run,Task.Delay(30000));
         if (winner == run) await run;
