@@ -70,22 +70,22 @@ internal sealed class TranscriptPanel : Border {
         // ScrollChanged is evidence of movement, never evidence of reader intent.
         // WPF also raises it for layout, extent clamping and our own restoration.
         Text.AddHandler(ScrollViewer.ScrollChangedEvent,new ScrollChangedEventHandler((_,_)=>{if(readerNavigating)ScheduleReaderPosition();}));
-        Text.PreviewMouseWheel+=(_,_)=>ReaderNavigating();
+        Text.PreviewMouseWheel+=(_,_)=>ReaderNavigating(reason:"wheel");
         Text.AddHandler(Keyboard.PreviewKeyDownEvent,new KeyEventHandler((_,e)=>{
             bool selectAll=e.Key==Key.A&&(Keyboard.Modifiers&ModifierKeys.Control)!=0;
             if(selectAll||e.Key is Key.Left or Key.Right or Key.Up or Key.Down or Key.PageUp or Key.PageDown or Key.Home or Key.End or Key.Space)
-                ReaderNavigating(selectAll||(Keyboard.Modifiers&ModifierKeys.Shift)!=0);
+                ReaderNavigating(selectAll||(Keyboard.Modifiers&ModifierKeys.Shift)!=0,"key:"+e.Key);
         }),true);
         // SelectAll from the context menu and the editor's Shift/Ctrl+Shift
         // bindings use routed commands, including commands invoked by assistive UI.
         Text.AddHandler(CommandManager.PreviewExecutedEvent,new ExecutedRoutedEventHandler((_,e)=>{
-            if(selectionCommands.Contains(e.Command))ReaderNavigating(true);
+            if(selectionCommands.Contains(e.Command))ReaderNavigating(true,"selection:"+((RoutedCommand)e.Command).Name);
             // Embedded scrollbar buttons route their commands to ScrollViewer;
             // unlike standalone bars, they need not raise ScrollBar.Scroll.
-            else if(navigationCommands.Contains(e.Command))ReaderNavigating();
+            else if(navigationCommands.Contains(e.Command))ReaderNavigating(reason:"navigation:"+((RoutedCommand)e.Command).Name);
         }),true);
         Text.PreviewMouseDown+=(_,e)=>{if(WindowDrag.Ancestor<ScrollBar>(e.OriginalSource as DependencyObject)!=null)ReaderNavigating();else if(HasTextAt(e.GetPosition(Text)))ReaderNavigating(true);};
-        Text.AddHandler(ScrollBar.ScrollEvent,new ScrollEventHandler((_,_)=>ReaderNavigating()),true);
+        Text.AddHandler(ScrollBar.ScrollEvent,new ScrollEventHandler((_,e)=>ReaderNavigating(reason:"scrollbar:"+e.ScrollEventType)),true);
         Text.AddHandler(Thumb.DragStartedEvent,new DragStartedEventHandler((_,_)=>{thumbDragging=true;ReaderNavigating();}),true);
         Text.AddHandler(Thumb.DragCompletedEvent,new DragCompletedEventHandler((_,_)=>{thumbDragging=false;ScheduleReaderPosition();}),true);
         Text.PreviewMouseUp+=(_,_)=>ScheduleReaderPosition();
@@ -103,14 +103,14 @@ internal sealed class TranscriptPanel : Border {
     internal bool Following=>follow.Following;
     internal bool ScrollWorkPending=>pending||settling||readerNavigating;
     long navigationTicket;
-    internal void ReaderNavigating(bool selecting=false){readerNavigating=true;readerSelecting=selecting;follow.BeginNavigation();ScheduleReaderPosition();}
+    internal void ReaderNavigating(bool selecting=false,string reason="reader-input"){readerNavigating=true;readerSelecting=selecting;follow.BeginNavigation();Trace(reason);ScheduleReaderPosition();}
     void ScheduleReaderPosition(){
         if(!readerNavigating)return;
         long ticket=++navigationTicket;
         Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle,new Action(()=>{
             if(ticket!=navigationTicket||!IsLoaded)return;
             // A held thumb or text-selection drag may keep moving between events.
-            follow.ReaderMoved(Text.VerticalOffset,Math.Max(0,Text.ExtentHeight-Text.Document.PagePadding.Bottom-Text.ViewportHeight),readerSelecting&&!Text.Selection.IsEmpty);lastAnchor=Capture();
+            follow.ReaderMoved(Text.VerticalOffset,Math.Max(0,Text.ExtentHeight-Text.Document.PagePadding.Bottom-Text.ViewportHeight),readerSelecting&&!Text.Selection.IsEmpty);lastAnchor=Capture();Trace("reader-position");
             if(!thumbDragging&&(Mouse.LeftButton!=MouseButtonState.Pressed||!Text.IsMouseCaptureWithin))readerNavigating=false;
             if(follow.Following&&!readerNavigating)QueueRestore(lastAnchor,Text.VerticalOffset,true);
         }));
@@ -218,7 +218,11 @@ internal sealed class TranscriptPanel : Border {
         var left=start.GetCharacterRect(LogicalDirection.Forward);var right=end.GetCharacterRect(LogicalDirection.Backward);
         return !left.IsEmpty&&!right.IsEmpty&&point.Y>=left.Top&&point.Y<=left.Bottom&&point.X<=right.Right+Text.FontSize*2;
     }
-    void Trace(string reason){if(!traceEnabled)return;geometry.Enqueue(new{reason,slot=Slot,offset=Text.VerticalOffset,extent=Text.ExtentHeight,viewport=Text.ViewportHeight,width=Text.ViewportWidth,padding=Text.Document.PagePadding.Bottom,count=segments.Length,following=follow.Following});while(geometry.Count>128)geometry.Dequeue();}
+    void Trace(string reason){if(!traceEnabled)return;geometry.Enqueue(new{reason,slot=Slot,offset=Text.VerticalOffset,extent=Text.ExtentHeight,viewport=Text.ViewportHeight,width=Text.ViewportWidth,padding=Text.Document.PagePadding.Bottom,count=segments.Length,following=follow.Following,readerNavigating,readerSelecting,revision=follow.Revision});while(geometry.Count>128)geometry.Dequeue();}
+    internal object ViewportDiagnostics(){
+        Rect? rect=null;try{if(IsLoaded)rect=paragraph.Inlines.OfType<Run>().LastOrDefault()?.ContentEnd.GetCharacterRect(LogicalDirection.Backward);}catch(InvalidOperationException){}
+        return new{slot=Slot,following=follow.Following,readerNavigating,readerSelecting,thumbDragging,pending,settling,offset=Text.VerticalOffset,extent=Text.ExtentHeight,viewport=Text.ViewportHeight,width=Text.ViewportWidth,padding=Text.Document.PagePadding.Bottom,latestTop=rect is{IsEmpty:false}?rect?.Top:null,latestBottom=rect is{IsEmpty:false}?rect?.Bottom:null,steps=Geometry().TakeLast(10)};
+    }
     internal bool LatestVisible(){var rect=paragraph.Inlines.OfType<Run>().LastOrDefault()?.ContentEnd.GetCharacterRect(LogicalDirection.Backward);return rect is {} r&&!r.IsEmpty&&r.Top>=-1&&r.Bottom<=Text.ViewportHeight+1;}
     internal (string Key,int Index,double Y)? ReadingMark(){var a=Capture();return a==null?null:(a.Key,a.Index,a.Y);}
     internal double? MarkY(string key,int index){if(!runs.TryGetValue(key,out var run))return null;var p=run.ContentStart.GetPositionAtOffset(Math.Clamp(index,0,run.Text.Length));var r=p?.GetCharacterRect(LogicalDirection.Forward);return r is {} rect&&!rect.IsEmpty?rect.Top:null;}
