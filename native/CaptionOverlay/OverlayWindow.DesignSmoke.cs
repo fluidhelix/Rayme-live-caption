@@ -106,6 +106,27 @@ internal sealed partial class OverlayWindow {
                 Check(mark is {} m&&Math.Abs((panel.MarkY(m.Key,m.Index)??double.MaxValue)-m.Y)<1,"Same-source revision preserves the selected reading viewport for "+name);
             }else Check(panel.Text.Selection.Text.Contains("Verified stable sentence"),"Select all retains earlier selected conversation across a same-source revision");
         }
+        // One/two-line gestures use the real editor/scrollbar route, including
+        // a layout pass between thumb movement and its EndScroll notification.
+        foreach(string gesture in new[]{"one-line key","single wheel","small thumb"}){
+            await Bottom();double start=panel.Text.VerticalOffset;
+            if(gesture=="one-line key")RoutedKey(panel,Key.Up);
+            else if(gesture=="single wheel")RoutedWheel(panel,120);
+            else{
+                var smallThumb=Descendants<Thumb>(bar).Single();
+                smallThumb.RaiseEvent(new DragStartedEventArgs(0,0){RoutedEvent=Thumb.DragStartedEvent});
+                var track=Descendants<Track>(bar).Single();
+                double delta=-24/Math.Abs(track.ValueFromDistance(0,1));
+                smallThumb.RaiseEvent(new DragDeltaEventArgs(0,delta){RoutedEvent=Thumb.DragDeltaEvent});
+                await Wait(()=>panel.Text.VerticalOffset<start-1,"small thumb movement applied before release");
+                smallThumb.RaiseEvent(new DragCompletedEventArgs(0,delta,false){RoutedEvent=Thumb.DragCompletedEvent});
+            }
+            await Wait(()=>!panel.ScrollWorkPending&&!panel.Following&&panel.Text.VerticalOffset<start-1,"small upward gesture pauses following: "+gesture);
+            Check(start-panel.Text.VerticalOffset<=60,"Small upward fixture stays within the old near-bottom band: "+gesture);
+            var smallMark=panel.ReadingMark()??throw new Exception("Missing small gesture reading anchor");
+            Caption(13,currentDraft+" additional speech",false);Paint();await AwaitPanels(panel);
+            Check(!panel.Following&&Math.Abs((panel.MarkY(smallMark.Key,smallMark.Index)??double.MaxValue)-smallMark.Y)<1,"Small reader movement survives subsequent speech: "+gesture);
+        }
         await Bottom();double before=panel.Text.VerticalOffset;RoutedWheel(panel,1200);
         await Wait(()=>!panel.ScrollWorkPending&&!panel.Following&&panel.Text.VerticalOffset<before-1,"actual routed wheel scrolls older text");
         var wheelMark=panel.ReadingMark()??throw new Exception("Missing wheel reading anchor");Caption(13,currentDraft+" "+Words(10),false);Paint();await AwaitPanels(panel);
