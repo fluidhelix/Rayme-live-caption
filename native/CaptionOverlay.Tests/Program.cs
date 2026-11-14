@@ -130,6 +130,13 @@ static class Program {
         Check(s.History.Count(c=>c.Source.Id=="b")==200&&s.History.Count(c=>c.Source.Id=="device")==200,"A's cleanup cannot evict B or device history");
         s=new CaptionState();
         string Retire(long id,long revision,bool terminal=false)=>JsonSerializer.Serialize(new{type="segment-retired",source=new{id=A.Id,generation=A.Generation,name=A.Name,identity=A.Identity},id,revision,terminal,retain=true});
+        foreach(string reply in new[]{"yeah","maybe","not sure","[laughter]"}){
+            var shortState=new CaptionState();shortState.Apply(Event("caption",A,1,false,reply));
+            var key=TranscriptPresentation.Segments(shortState,"a").Single().Key;
+            shortState.Apply(Retire(1,2,true));
+            Check(shortState.Partials.Count==0&&shortState.History.Single() is{Final:false,Unfinished:true}&&TranscriptPresentation.Segments(shortState,"a").Single() is var shown&&shown.Text==reply&&shown.Key==key,"Capture-end terminal retirement preserves short recognition under the same visual identity: "+reply);
+            shortState.Apply(Event("caption",A,1,true,"late replacement"));Check(shortState.History.Single().Text==reply,"A terminal short draft cannot be revived or falsely finalized: "+reply);
+        }
         var capped=new CaptionState();for(int id=1;id<=200;id++)capped.Apply(Event("caption",A,id,true,capturedAt:id));capped.Apply(Event("caption",A,201,false,"Useful draft at capacity",201));
         var liveKey=TranscriptPresentation.Segments(capped,"a").Last().Key;capped.Apply(Retire(201,1));
         Check(capped.History.Count==200&&capped.History[0].Id==2&&capped.History[^1].Unfinished,"At-capacity retirement consumes one retained slot and prunes the oldest record");
@@ -154,8 +161,10 @@ static class Program {
         follow.ReaderMoved(500,500,selecting:true);Check(!follow.NeedsReveal(220,250,200),"An active user selection prevents near-bottom follow from rearming");
         follow.ReaderMoved(500,500);Check(follow.Following,"Explicit non-selection navigation back to the bottom resumes following");
         Check(follow.NeedsReveal(-3.8166666667,25.4466666667,209),"A latest line clipped by a committed anchor scroll still requires reveal");
-        follow.ReaderMoved(1673.4,1721.4,movingAway:true);Check(!follow.Following,"A 48-DIP upward wheel step stays in rereading mode inside the unchanged 60-DIP band");
-        follow.ReaderMoved(1711.4,1721.4);Check(follow.Following,"Downward reader return inside the existing near-bottom band resumes follow");
+        follow.ReaderMoved(1673.4,1721.4,movingAway:true);Check(!follow.Following,"A 48-DIP upward wheel step stays in rereading mode");
+        follow.ReaderMoved(1711.4,1721.4);Check(!follow.Following,"Downward movement still above the bottom cannot resume live following");
+        follow.ReaderMoved(1721.3,1721.4,movingAway:true);Check(!follow.Following,"A deliberate fractional upward movement pauses follow even inside bottom rounding tolerance");
+        follow.ReaderMoved(1721.4,1721.4);Check(follow.Following,"An explicit return to the actual bottom resumes follow");
         Check(!follow.NeedsReveal(double.NaN,250,200)&&!follow.NeedsReveal(0,0,0),"Unmeasured layout cannot request a spurious scroll");
     }
     static void UsabilityTests(){
@@ -171,7 +180,7 @@ static class Program {
         Check(TranscriptPresentation.Build(state,"b").FinalText.Length==0,"Other application transcript remains independent");
         state.Apply(Event("source-removed",A with{Generation=3}));var device=new Source("device",4,"Default output","default");state.Apply(Event("reset",device));
         Check(TranscriptPresentation.Slots(state).SequenceEqual(new[]{"device"}),"Whole-device fallback occupies one full panel");
-        var a=new ScrollFollow();var b=new ScrollFollow();a.ReaderMoved(20,500);b.ReaderMoved(450,500);Check(!a.Following&&b.Following,"Each transcript maintains independent follow intent");long version=a.Revision;a.ReaderMoved(450,500);Check(a.Revision>version,"Reader navigation invalidates pending follow operations");Check(a.Following,"Near-bottom reading resumes follow within 60 DIPs");
+        var a=new ScrollFollow();var b=new ScrollFollow();a.ReaderMoved(20,500);b.ReaderMoved(500,500);Check(!a.Following&&b.Following,"Each transcript maintains independent follow intent");long version=a.Revision;a.ReaderMoved(450,500);Check(a.Revision>version,"Reader navigation invalidates pending follow operations");Check(!a.Following,"A near-bottom position remains manual until the reader returns to the bottom");a.ReaderMoved(500,500);Check(a.Following,"Explicit bottom navigation resumes this source independently");
         Check(WindowInteraction.LockGlyph(true)=="\uE72E"&&WindowInteraction.LockGlyph(false)=="\uE785","Closed padlock indicates locked and open padlock indicates unlocked");
         Check(WindowInteraction.LockAction(true).StartsWith("Unlock")&&WindowInteraction.LockHint(true).Contains("locked"),"Lock actions and hints agree with actual state");
         foreach(string phase in new[]{"checking","downloading","verifying","loading","switching","choose","error","ready"}){

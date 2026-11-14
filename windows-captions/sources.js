@@ -132,7 +132,11 @@ class SourceManager {
       entry.anchor = null;
       segmenter.on('segment', job => {if(currentSegment())this.scheduler.add(origin, { ...job, capturedAt: entry.anchor + job.captureOffsetMs, audioEndAt: entry.anchor+job.captureOffsetMs+job.pcm.length/32 });});
       segmenter.on('level', level=>{if(currentSegment()){const rms=Math.round(level.rms);this.publish({type:'audio-level',source:origin,rms,dbfs:Math.round(20*Math.log10(Math.max(1,rms)/32768)),low:rms<this.threshold});}});
-      segmenter.on('retire', job => {if(currentSegment()){this.scheduler.retire(origin,job.id,job.reason);this.status(origin,'waiting',job.reason+' Listening for speech.');}});
+      // Insufficient voiced duration disqualifies a final, not recognition that
+      // was already shown. Retire it as DRAFT; never synthesize text or accept
+      // a late result after this terminal boundary. Explicit noise/discard
+      // retirements elsewhere retain their default retain:false behavior.
+      segmenter.on('retire', job => {if(currentSegment()){this.scheduler.retire(origin,job.id,job.reason,true,undefined,true);this.status(origin,'waiting',job.reason+' Any displayed recognition is retained as an unfinished draft. Listening for speech.');}});
       segmenter.on('activity', event=>{if(currentSegment()&&!event.rejected)this.status(origin,event.active?'capturing':'waiting',event.active?'Capture active — speech detected.':'Capture active — listening for speech.');});
       entry.push = pcm => { if(!currentSegment())return;if (entry.anchor === null) entry.anchor = this.now() - pcm.length / 32; segmenter.partialMs=this.scheduler.partialInterval(); segmenter.push(pcm); };
       this.scheduler.attach(entry.source); this.publish({ type: 'reset', source: entry.source });

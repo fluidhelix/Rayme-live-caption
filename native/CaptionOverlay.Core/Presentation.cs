@@ -54,7 +54,7 @@ public static class TranscriptPresentation {
 public sealed class ScrollFollow {
     public bool Following { get; private set; }=true;
     public long Revision {get;private set;}
-    public void ReaderMoved(double offset,double scrollable,bool selecting=false,bool movingAway=false){Following=!selecting&&!movingAway&&scrollable-offset<=60;Revision++;}
+    public void ReaderMoved(double offset,double scrollable,bool selecting=false,bool movingAway=false){Following=!selecting&&!movingAway&&scrollable-offset<=1;Revision++;}
     public void BeginNavigation(){Following=false;Revision++;}
     public bool NeedsReveal(double top,double bottom,double viewport)=>Following&&double.IsFinite(top)&&double.IsFinite(bottom)&&viewport>0&&(bottom>viewport+.5||top<-.5);
 }

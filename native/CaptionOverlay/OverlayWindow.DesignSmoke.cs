@@ -108,7 +108,7 @@ internal sealed partial class OverlayWindow {
         }
         // One/two-line gestures use the real editor/scrollbar route, including
         // a layout pass between thumb movement and its EndScroll notification.
-        foreach(string gesture in new[]{"one-line key","single wheel","small thumb"}){
+        foreach(string gesture in new[]{"one-line key","single wheel","small thumb","fractional thumb"}){
             await Bottom();double start=panel.Text.VerticalOffset;
             if(gesture=="one-line key")RoutedKey(panel,Key.Up);
             else if(gesture=="single wheel")RoutedWheel(panel,120);
@@ -116,17 +116,24 @@ internal sealed partial class OverlayWindow {
                 var smallThumb=Descendants<Thumb>(bar).Single();
                 smallThumb.RaiseEvent(new DragStartedEventArgs(0,0){RoutedEvent=Thumb.DragStartedEvent});
                 var track=Descendants<Track>(bar).Single();
-                double delta=-24/Math.Abs(track.ValueFromDistance(0,1));
+                double delta=-(gesture=="fractional thumb"?.25:24)/Math.Abs(track.ValueFromDistance(0,1));
                 smallThumb.RaiseEvent(new DragDeltaEventArgs(0,delta){RoutedEvent=Thumb.DragDeltaEvent});
-                await Wait(()=>panel.Text.VerticalOffset<start-1,"small thumb movement applied before release");
+                await Wait(()=>panel.Text.VerticalOffset<start-.1,"small thumb movement applied before release");
                 smallThumb.RaiseEvent(new DragCompletedEventArgs(0,delta,false){RoutedEvent=Thumb.DragCompletedEvent});
             }
-            await Wait(()=>!panel.ScrollWorkPending&&!panel.Following&&panel.Text.VerticalOffset<start-1,"small upward gesture pauses following: "+gesture);
+            await Wait(()=>!panel.ScrollWorkPending&&!panel.Following&&panel.Text.VerticalOffset<start-.1,"small upward gesture pauses following: "+gesture);
             Check(start-panel.Text.VerticalOffset<=60,"Small upward fixture stays within the old near-bottom band: "+gesture);
             var smallMark=panel.ReadingMark()??throw new Exception("Missing small gesture reading anchor");
             Caption(13,currentDraft+" additional speech",false);Paint();await AwaitPanels(panel);
             Check(!panel.Following&&Math.Abs((panel.MarkY(smallMark.Key,smallMark.Index)??double.MaxValue)-smallMark.Y)<1,"Small reader movement survives subsequent speech: "+gesture);
         }
+        await Bottom();double returnBottom=panel.Text.VerticalOffset;
+        RoutedKey(panel,Key.Up);RoutedKey(panel,Key.Up);
+        await Wait(()=>!panel.ScrollWorkPending&&!panel.Following&&panel.Text.VerticalOffset<returnBottom-1,"two upward lines pause following");
+        double rereading=panel.Text.VerticalOffset;RoutedKey(panel,Key.Down);
+        await Wait(()=>!panel.ScrollWorkPending&&panel.Text.VerticalOffset>rereading&&!panel.Following,"one downward line is not a return to the bottom");
+        var returnMark=panel.ReadingMark()??throw new Exception("Missing partial return anchor");Caption(13,currentDraft+" speech while reviewing",false);Paint();await AwaitPanels(panel);
+        Check(!panel.Following&&Math.Abs((panel.MarkY(returnMark.Key,returnMark.Index)??double.MaxValue)-returnMark.Y)<1,"Partial downward return preserves reading position through new speech");
         await Bottom();double before=panel.Text.VerticalOffset;RoutedWheel(panel,1200);
         await Wait(()=>!panel.ScrollWorkPending&&!panel.Following&&panel.Text.VerticalOffset<before-1,"actual routed wheel scrolls older text");
         var wheelMark=panel.ReadingMark()??throw new Exception("Missing wheel reading anchor");Caption(13,currentDraft+" "+Words(10),false);Paint();await AwaitPanels(panel);

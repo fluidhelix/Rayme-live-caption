@@ -2,7 +2,7 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const {WebSocket}=require('ws');
-const {SourceScheduler}=require('../windows-captions/sources');
+const {SourceScheduler,SourceManager}=require('../windows-captions/sources');
 const {createUI}=require('../windows-captions/server');
 const policy=require('../windows-captions/history-policy');
 const A={id:'a',generation:1,name:'Chrome',identity:'10:100'},B={id:'b',generation:2,name:'Discord',identity:'20:200'},D={id:'device',generation:3,name:'Playback',identity:'default'};
@@ -101,4 +101,43 @@ test('Clear History removes displayed content but does not cancel fresh recognit
   assert.equal(active.signal.aborted,false);assert.equal(f.events.filter(e=>e.type==='caption').length,1);
   if(final)assert.deepEqual(f.ui.state.history.map(c=>c.text),['Fresh completion after Clear']);else assert.equal(f.ui.state.partials.a.text,'Fresh completion after Clear');
  }finally{await f.close();}}
+});
+
+function pcm(ms,value=1000){const b=Buffer.alloc(ms*32);for(let i=0;i<b.length;i+=2)b.writeInt16LE(value,i);return b;}
+async function shortFixture(){const f=await fixture();let input;
+ const manager=new SourceManager({scheduler:f.q,publish:f.ui.publish,now:f.time.now,createCapture:audio=>{input=audio;return{async select(){},async close(){}};}});
+ await manager.configure('a',{kind:'process',id:A.identity,pid:10,started:'100',name:'Chrome'});
+ const source=manager.slots.get('a').source;
+ return{...f,manager,source,input:bytes=>input(bytes),close:async()=>{await manager.close();await f.close();}};
+}
+test('capture-end rejection preserves already displayed short replies as unfinished, with live/reconnect equality',async()=>{
+ for(const text of['yeah','maybe','not sure','[laughter]','*sighing*']){const f=await shortFixture();try{
+  caption(f.ui,B,1,'Other application final');
+  f.input(pcm(180));f.input(pcm(520,0));assert.equal(f.calls.length,1);f.calls.shift().resolve(text);await tick();
+  assert.equal(f.ui.state.partials.a.text,text);const shown=f.ui.state.partials.a;
+  f.input(pcm(380,0));await tick();
+  assert.equal(f.ui.state.partials.a,undefined);assert.equal(f.events.filter(e=>e.type==='caption'&&e.final).length,0);
+  const draft=f.ui.state.history.find(c=>c.source.id==='a');assert.deepEqual(draft,{...shown,final:false,unfinished:true});
+  assert.equal(f.ui.state.history.find(c=>c.source.id==='b').text,'Other application final');
+  assert.match(f.ui.state.sources.a.message,/unfinished draft/);assert.deepEqual((await snapshot(f.ui)).history,f.ui.state.history);
+  f.ui.publish({...shown,revision:999,text:'late replacement'});assert.equal(f.ui.state.partials.a,undefined);assert.equal(f.ui.state.history.find(c=>c.source.id==='a').text,text);
+  f.time.advance(60000);assert.equal(f.ui.state.history.find(c=>c.source.id==='a').text,text);
+ }finally{await f.close();}}
+});
+test('short capture with no recognized text, pending inference or explicit clear cannot invent retained noise',async()=>{
+ for(const outcome of['empty','late','cleared']){const f=await shortFixture();try{
+  f.input(pcm(20));f.input(pcm(680,0));assert.equal(f.calls.length,1);const active=f.calls.shift();
+  if(outcome!=='late'){active.resolve(outcome==='empty'?'':'yeah');await tick();}
+  if(outcome==='cleared')f.ui.publish({type:'cleared'});
+  f.input(pcm(220,0));if(outcome==='late'){active.resolve('late hallucination');await tick();}
+  assert.equal(f.ui.state.partials.a,undefined);assert.equal(f.ui.state.history.length,0);assert.equal((await snapshot(f.ui)).history.length,0);
+ }finally{await f.close();}}
+});
+test('explicit noise rejection can still remove its retained draft without affecting newer speech or finals',async()=>{
+ const f=await shortFixture();try{
+  caption(f.ui,B,1,'Other final');f.input(pcm(180));f.input(pcm(520,0));f.calls.shift().resolve('yeah');await tick();f.input(pcm(380,0));
+  assert.equal(f.ui.state.history.filter(c=>c.unfinished).length,1);
+  f.q.retire(f.source,1,'Explicitly rejected noise');
+  assert.equal(f.ui.state.history.length,1);assert.equal(f.ui.state.history[0].text,'Other final');assert.equal(f.ui.state.partials.a,undefined);
+ }finally{await f.close();}
 });

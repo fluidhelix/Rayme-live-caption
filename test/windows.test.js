@@ -41,6 +41,12 @@ test('Whisper sends local WAV, preserves annotations, rejects HTTP errors and no
  const w=new Whisper({});w.url=s.url;
  try {assert.equal(await w.infer(tone(100)),'[laughter] *coughing* *sighing*');mode='error';await assert.rejects(w.infer(tone(100)),/HTTP 500/);mode='html';await assert.rejects(w.infer(tone(100)));}finally{await s.close();}
 });
+test('Whisper filters explicit no-audio markers but preserves short replies and vocal cues',async()=>{
+ let text='';const s=await serve(async(req,res)=>{for await(const _ of req){}res.end(JSON.stringify({text}));});const w=new Whisper({});w.url=s.url;
+ try{for(text of['','  ','[BLANK_AUDIO]','(silence)','no audio.'])assert.equal(await w.infer(tone(100)), '');
+  for(text of['yeah','maybe','not sure','[laughter]','*sighing*'])assert.equal(await w.infer(tone(100)),text);
+ }finally{await s.close();}
+});
 test('missing runtime is actionable without needing Discord credentials',()=>{assert.throws(()=>resolveRuntime({},'/does-not-exist'),/Missing local Whisper/);});
 test('test-only startup diagnostics report a real spawn failure without environment secrets',async()=>{
  const s=await serve((_req,res)=>res.end());const port=new URL(s.url).port;await s.close();

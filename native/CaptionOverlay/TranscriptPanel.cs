@@ -114,17 +114,18 @@ internal sealed class TranscriptPanel : Border {
     internal bool Following=>follow.Following;
     internal bool ScrollWorkPending=>pending||settling||readerNavigating;
     long navigationTicket;
-    internal void ReaderNavigating(bool selecting=false,string reason="reader-input"){readerStartOffset=Text.VerticalOffset;readerNavigating=true;readerSelecting=selecting;follow.BeginNavigation();Trace(reason);ScheduleReaderPosition();}
+    // One gesture can route preview, command, thumb-track and EndScroll events.
+    // Completion must not overwrite its pre-movement offset after layout settles.
+    internal void ReaderNavigating(bool selecting=false,string reason="reader-input"){if(!readerNavigating)readerStartOffset=Text.VerticalOffset;readerNavigating=true;readerSelecting=selecting;follow.BeginNavigation();Trace(reason);ScheduleReaderPosition();}
     void ScheduleReaderPosition(){
         if(!readerNavigating)return;
         long ticket=++navigationTicket;
         Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle,new Action(()=>{
             if(ticket!=navigationTicket||!IsLoaded)return;
             // A held thumb or text-selection drag may keep moving between events.
-            // A single Windows wheel step is commonly 48 DIPs, inside the
-            // existing 60-DIP resume band. Moving upward is still rereading;
-            // only stationary/downward navigation may rearm near-bottom follow.
-            bool movingAway=Text.VerticalOffset<readerStartOffset-.5;
+            // Even a fractional upward move is rereading. Resume only on an
+            // explicit return to the bottom, never on layout or gesture completion.
+            bool movingAway=Text.VerticalOffset<readerStartOffset;
             follow.ReaderMoved(Text.VerticalOffset,Math.Max(0,Text.ExtentHeight-Text.Document.PagePadding.Bottom-Text.ViewportHeight),readerSelecting&&!Text.Selection.IsEmpty,movingAway);lastAnchor=Capture();Trace("reader-position");
             if(!thumbDragging&&(Mouse.LeftButton!=MouseButtonState.Pressed||!Text.IsMouseCaptureWithin))readerNavigating=false;
             if(follow.Following&&!readerNavigating)QueueRestore(lastAnchor,Text.VerticalOffset,true);
