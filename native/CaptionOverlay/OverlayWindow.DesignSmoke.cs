@@ -134,6 +134,10 @@ internal sealed partial class OverlayWindow {
         await Wait(()=>!panel.ScrollWorkPending&&panel.Text.VerticalOffset>rereading&&!panel.Following,"one downward line is not a return to the bottom");
         var returnMark=panel.ReadingMark()??throw new Exception("Missing partial return anchor");Caption(13,currentDraft+" speech while reviewing",false);Paint();await AwaitPanels(panel);
         Check(!panel.Following&&Math.Abs((panel.MarkY(returnMark.Key,returnMark.Index)??double.MaxValue)-returnMark.Y)<1,"Partial downward return preserves reading position through new speech");
+        // Restore the original repeated-word fixture before the independent
+        // suffix-mapping checks below. The small-gesture cases deliberately
+        // appended different words, so their tail is not that unchanged suffix.
+        Caption(13,"Revised earlier words "+selectionRevision+" "+Words(35+selectionRevision),false);Paint();await AwaitPanels(panel);
         await Bottom();double before=panel.Text.VerticalOffset;RoutedWheel(panel,1200);
         await Wait(()=>!panel.ScrollWorkPending&&!panel.Following&&panel.Text.VerticalOffset<before-1,"actual routed wheel scrolls older text");
         var wheelMark=panel.ReadingMark()??throw new Exception("Missing wheel reading anchor");Caption(13,currentDraft+" "+Words(10),false);Paint();await AwaitPanels(panel);
