@@ -7,7 +7,7 @@ const { SegmentLedger } = require('./caption-lifecycle');
 class SourceScheduler {
   constructor(infer,publish,status,now=Date.now,{maxAgeMs=15000,setTimer=setTimeout,clearTimer=clearTimeout,elapsedNow=now===Date.now?()=>performance.now():now}={}) {
     if(!Number.isFinite(maxAgeMs)||maxAgeMs<1000||maxAgeMs>120000)throw Error('Caption freshness must be between 1000 and 120000 ms.');
-    Object.assign(this,{infer,publish,status,now,maxAgeMs,setTimer,clearTimer,elapsedNow});this.sources=new Map();this.last=null;this.busy=false;this.closed=false;
+    Object.assign(this,{infer,publish,status,now,maxAgeMs,setTimer,clearTimer,elapsedNow});this.sources=new Map();this.last=null;this.busy=false;this.closed=false;this.finalBurst=0;this.lastPartial=null;
   }
   partialInterval(){
     const estimate=Math.max(this.inferenceMs||0,this.active?this.elapsedNow()-this.active.started:0);
@@ -62,8 +62,13 @@ class SourceScheduler {
     if(this.busy||this.closed)return;
     for(const state of this.sources.values())this.prune(state);
     const keys=[...this.sources.keys()],start=(keys.indexOf(this.last)+1)%(keys.length||1),order=keys.slice(start).concat(keys.slice(0,start));
-    let key=order.find(k=>this.sources.get(k).finals.length);if(!key)key=order.find(k=>this.sources.get(k).partial);if(!key)return;
-    const state=this.sources.get(key),job=state.finals.shift()||state.partial;if(job===state.partial)state.partial=null;
+    // Retain final priority, but grant a waiting partial a turn after at most
+    // one source-count burst. Sustained finals must not starve quieter apps.
+    const partialStart=(keys.indexOf(this.lastPartial)+1)%(keys.length||1),partialOrder=keys.slice(partialStart).concat(keys.slice(0,partialStart));
+    const partialKey=partialOrder.find(k=>this.sources.get(k).partial),grantPartial=!!partialKey&&this.finalBurst>=keys.length;
+    let key=grantPartial?partialKey:order.find(k=>this.sources.get(k).finals.length)||partialKey;if(!key)return;
+    const state=this.sources.get(key),job=grantPartial?state.partial:state.finals.shift()||state.partial;if(job===state.partial)state.partial=null;
+    this.finalBurst=job.final?Math.min(keys.length,this.finalBurst+1):0;if(!job.final)this.lastPartial=key;
     this.last=key;this.busy=true;this.active={state,job,started:this.elapsedNow()};this.watchQueue(state);this.controller=new AbortController();let handled=false;const started=this.elapsedNow(),queueAgeMs=started-job.queuedMonoAt;
     this.health(state,state.failed?'recovering':queueAgeMs>3000?'delayed':'transcribing',state.failed?'Retrying local transcription; previous failure remains visible.':queueAgeMs>3000?'Transcribing delayed audio.':'Transcribing current speech.');
     try{
@@ -104,7 +109,7 @@ class SourceManager {
   }
   async configure(slot, descriptor) {
     if (this.closed) return;
-    if (!['a', 'b', 'device'].includes(slot)) throw Error('Unknown source slot');
+    if (!['a', 'b', 'c', 'd', 'e', 'device'].includes(slot)) throw Error('Unknown source slot');
     if (!descriptor) { await this.remove(slot); return; }
     if ((slot === 'device') !== (descriptor.kind === 'device')) throw Error('Source mode mismatch');
     if (descriptor.kind === 'process' && (!Number.isInteger(descriptor.pid) || !/^\d+$/.test(descriptor.started))) throw Error('Invalid process identity');

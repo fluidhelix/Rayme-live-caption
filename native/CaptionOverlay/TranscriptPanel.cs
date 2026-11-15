@@ -14,8 +14,13 @@ namespace Rayme.Overlay;
 // One continuous selectable paragraph per source. Runs retain protocol segment identity.
 // Health/LIVE updates never mutate the document or request a scroll.
 internal sealed class TranscriptPanel : Border {
-    readonly TextBlock label=Theme.Text("",16,strong:true),live=Theme.Text("LIVE",10,"#E3E3E3",true);
-    internal readonly RichTextBox Text=new(){IsReadOnly=true,IsReadOnlyCaretVisible=false,IsUndoEnabled=false,AcceptsTab=false,Background=Brushes.Transparent,Foreground=Theme.Brush("#F2F2F2"),BorderThickness=new(0),Padding=new(0),VerticalScrollBarVisibility=ScrollBarVisibility.Visible,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,FontStyle=FontStyles.Normal,FontWeight=FontWeights.Normal,SelectionBrush=Theme.Brush("#555555")};
+    readonly TextBlock label=Theme.Text("",16,strong:true),availability=Theme.Text("Available",11,"#C4C4C4");
+    readonly Border availabilityDot=new(){Width=7,Height=7,CornerRadius=new(4),Margin=new(0,0,7,0),VerticalAlignment=VerticalAlignment.Center};
+    bool recognitionLive;
+    Availability? lastAvailability;
+    string availabilityName="",labelColor="";
+    double wrapWidth;
+    internal readonly RichTextBox Text=new(){IsReadOnly=true,IsReadOnlyCaretVisible=false,IsUndoEnabled=false,AcceptsTab=false,Background=Brushes.Transparent,Foreground=Theme.Brush("#F2F2F2"),BorderThickness=new(0),Padding=new(0),VerticalScrollBarVisibility=ScrollBarVisibility.Hidden,HorizontalScrollBarVisibility=ScrollBarVisibility.Disabled,FontStyle=FontStyles.Normal,FontWeight=FontWeights.Normal,SelectionBrush=Theme.Brush("#555555")};
     readonly Paragraph paragraph=new(){Margin=new(0)};
     readonly Dictionary<string,Run> runs=[];
     TranscriptSegment[] segments=[];
@@ -55,7 +60,12 @@ internal sealed class TranscriptPanel : Border {
             Key.Home=>ScrollBar.ScrollToTopCommand,Key.End=>ScrollBar.ScrollToBottomCommand,_=>null};
     }
     internal string Slot {get;}
-    internal bool IsLive=>live.Visibility==Visibility.Visible&&live.Text=="LIVE";
+    internal bool IsLive=>recognitionLive;
+    internal string AvailabilityText=>availability.Text;
+    internal bool HasDraftDecoration=>runs.Values.Any(r=>r.TextDecorations?.Count>0);
+    internal double ContinuationIndent=>paragraph.TextIndent;
+    internal int RenderedSegments=>runs.Count;
+    internal bool HasPrunedAnchorText=>new[]{lastAnchor,pendingAnchor}.Any(a=>a!=null&&!runs.ContainsKey(a.Key)&&a.OldText.Length>0);
     internal string SourceLabel=>label.Text;
     internal string FinalText=>string.Join(" ",segments.Where(x=>x.Final).Select(x=>x.Text));
     internal string PartialText=>string.Join(" ",segments.Where(x=>!x.Final&&!x.Unfinished).Select(x=>x.Text));
@@ -67,11 +77,9 @@ internal sealed class TranscriptPanel : Border {
         Slot=slot;traceEnabled=trace;Padding=new(18,0,8,8);BorderThickness=new(0);Background=Brushes.Transparent;
         var grid=new Grid();grid.RowDefinitions.Add(new(){Height=new GridLength(34)});grid.RowDefinitions.Add(new());
         var header=new DockPanel();
-        var badge=new Border{Width=40,Height=18,CornerRadius=new(9),Background=Theme.Brush("#252525"),Child=live,VerticalAlignment=VerticalAlignment.Center,Margin=new(8,0,4,0)};
-        live.HorizontalAlignment=HorizontalAlignment.Center;live.VerticalAlignment=VerticalAlignment.Center;
-        // Reserve the entire badge's layout even when not live.
-        live.Visibility=Visibility.Hidden;badge.SetBinding(OpacityProperty,new System.Windows.Data.Binding("Visibility"){Source=live,Converter=new LiveOpacity()});
-        DockPanel.SetDock(badge,Dock.Right);header.Children.Add(badge);label.TextWrapping=TextWrapping.NoWrap;label.TextTrimming=TextTrimming.CharacterEllipsis;label.VerticalAlignment=VerticalAlignment.Center;header.Children.Add(label);grid.Children.Add(header);
+        availability.VerticalAlignment=VerticalAlignment.Center;availability.Margin=new(8,0,4,0);DockPanel.SetDock(availability,Dock.Right);header.Children.Add(availability);
+        DockPanel.SetDock(availabilityDot,Dock.Left);header.Children.Add(availabilityDot);
+        label.TextWrapping=TextWrapping.NoWrap;label.TextTrimming=TextTrimming.CharacterEllipsis;label.VerticalAlignment=VerticalAlignment.Center;header.Children.Add(label);grid.Children.Add(header);
         Text.Document=new FlowDocument(paragraph){PagePadding=new(0),Foreground=Theme.Brush("#F2F2F2"),FontFamily=new FontFamily("Segoe UI Variable Text, Segoe UI")};Text.Tag=this;var menu=new ContextMenu();menu.Items.Add(new MenuItem{Header="Copy",Command=ApplicationCommands.Copy,CommandTarget=Text});menu.Items.Add(new MenuItem{Header="Select all",Command=ApplicationCommands.SelectAll,CommandTarget=Text});Text.ContextMenu=menu;Theme.Accessible(Text,slot=="device"?"Playback transcript":"Application "+slot.ToUpperInvariant()+" transcript");Text.SetResourceReference(Control.FocusVisualStyleProperty,"KeyboardFocus");
         // ScrollChanged is evidence of movement, never evidence of reader intent.
         // WPF also raises it for layout, extent clamping and our own restoration.
@@ -101,15 +109,17 @@ internal sealed class TranscriptPanel : Border {
         Text.AddHandler(Thumb.DragCompletedEvent,new DragCompletedEventHandler((_,_)=>{thumbDragging=false;ScheduleReaderPosition();}),true);
         Text.PreviewMouseUp+=(_,_)=>ScheduleReaderPosition();
         Text.LostMouseCapture+=(_,_)=>{thumbDragging=false;ScheduleReaderPosition();};
+        Text.SizeChanged+=(_,e)=>{if(e.WidthChanged&&Math.Abs(wrapWidth-e.NewSize.Width)>.5){wrapWidth=e.NewSize.Width;paragraph.TextIndent=0;}};
         SizeChanged+=(_,_)=>{if(!settling)QueueRestore(lastAnchor,Text.VerticalOffset,true);};
         Loaded+=(_,_)=>QueueRestore(lastAnchor,Text.VerticalOffset,true);
         Unloaded+=(_,_)=>{readerNavigating=thumbDragging=false;navigationTicket++;};
         IsVisibleChanged+=(_,_)=>{if(IsVisible)QueueRestore(lastAnchor,Text.VerticalOffset,true);};
         Grid.SetRow(Text,1);grid.Children.Add(Text);Child=grid;
     }
-    sealed class LiveOpacity:System.Windows.Data.IValueConverter {
-        public object Convert(object value,Type t,object p,System.Globalization.CultureInfo c)=>value is Visibility.Visible?1d:0d;
-        public object ConvertBack(object v,Type t,object p,System.Globalization.CultureInfo c)=>throw new NotSupportedException();
+    internal void Availability(SourceStatus? source,bool paused,bool connected){
+        var value=SourceAvailability.Read(source,paused,connected);if(value==lastAvailability&&availabilityName==(source?.Source.Name??""))return;lastAvailability=value;availabilityName=source?.Source.Name??"";availability.Text=value.Label;availability.ToolTip=value.Detail;
+        availabilityDot.Background=Theme.Brush(value.Healthy?"#70BD5B":value.Error?"#F2C282":"#A0A0A0");
+        Theme.Accessible(availability,(source?.Source.Name??"Source")+": "+value.Label+(value.Error?" — "+value.Detail:""));
     }
     internal bool Following=>follow.Following;
     internal bool ScrollWorkPending=>pending||settling||readerNavigating;
@@ -198,16 +208,34 @@ internal sealed class TranscriptPanel : Border {
     internal void PrepareMove(){lastAnchor=Capture()??lastAnchor;QueueRestore(lastAnchor,Text.VerticalOffset);}
     internal void Interactions(bool locked){Cursor=locked?Cursors.Arrow:Cursors.SizeAll;Text.Cursor=Cursors.IBeam;}
     internal void Update(CaptionState state,double size,string color,bool setup){
-        var projection=TranscriptPresentation.Header(state,Slot);Theme.Accessible(Text,projection.Label+" transcript");label.Text=projection.Label;label.ToolTip=projection.Label;label.Foreground=Theme.Brush(color);live.Text=projection.Live?"LIVE":"DRAFT";live.ToolTip=projection.Live?"Recognition is updating":"Underlined text is unfinished recognition retained for reading, not a verified final.";live.Visibility=projection.Live||projection.Unfinished?Visibility.Visible:Visibility.Hidden;
+        var projection=TranscriptPresentation.Header(state,Slot);Theme.Accessible(Text,projection.Label+" transcript");label.Text=projection.Label;label.ToolTip=projection.Label;if(labelColor!=color){label.Foreground=Theme.Brush(color);labelColor=color;}recognitionLive=projection.Live;
         var next=TranscriptPresentation.Segments(state,Slot);
         string nextIdentity=state.Sources.GetValueOrDefault(Slot)?.Source.Identity??"";
         bool resetView=identity!=nextIdentity||segments.Length>0&&next.Length==0;
-        if(resetView){identity=nextIdentity;lastAnchor=pendingAnchor=null;follow=new();pending=false;readerNavigating=readerSelecting=thumbDragging=false;navigationTicket++;Text.Document.PagePadding=new(0);Text.ScrollToHome();}
+        if(resetView){identity=nextIdentity;lastAnchor=pendingAnchor=null;follow=new();pending=false;readerNavigating=readerSelecting=thumbDragging=false;navigationTicket++;Text.Document.PagePadding=new(0);paragraph.TextIndent=0;Text.ScrollToHome();}
         bool fontChanged=Text.FontSize!=size;
         bool changed=!segments.SequenceEqual(next)||fontChanged||next.Length==0&&lastSetup!=setup;
         bool geometryChanged=fontChanged||!segments.Select(s=>(s.Key,s.Text)).SequenceEqual(next.Select(s=>(s.Key,s.Text)))||next.Length==0&&lastSetup!=setup;
         if(!changed)return;
         var anchor=resetView?null:pending?pendingAnchor:Capture()??lastAnchor;double offset=resetView?0:Text.VerticalOffset;
+        // Prefix deletion changes the first line's horizontal origin in a
+        // continuous paragraph. Preserve that native line context using one
+        // bounded scalar, not deleted text, spacer Runs or blank paragraphs.
+        double? continuation=null;
+        if(!fontChanged&&!resetView&&next.Length>0&&segments.Length>0){
+            int retained=Array.FindIndex(segments,s=>s.Key==next[0].Key);
+            if(retained>0&&runs.TryGetValue(next[0].Key,out var head)&&paragraph.Inlines.FirstInline is Run first){
+                continuation=0;
+                if(IsLoaded&&Text.IsMeasureValid&&Text.IsArrangeValid)try{
+                    var origin=first.ContentStart.GetCharacterRect(LogicalDirection.Forward);
+                    int leading=head.Text.StartsWith(" ",StringComparison.Ordinal)?1:0;
+                    var rect=head.ContentStart.GetPositionAtOffset(leading)?.GetCharacterRect(LogicalDirection.Forward);
+                    if(!origin.IsEmpty&&rect is{} r&&!r.IsEmpty)continuation=ParagraphContinuation.Indent(origin.X,paragraph.TextIndent,r.X,Text.ViewportWidth);
+                }catch(InvalidOperationException){/* No usable layout yet: reflow normally on load. */}
+            }else if(retained<0)continuation=0;
+        }
+        if(fontChanged||resetView)paragraph.TextIndent=0;
+        else if(continuation is{} indent)paragraph.TextIndent=indent;
         Trace("before-update");
         Text.BeginChange();
         try{
@@ -217,13 +245,17 @@ internal sealed class TranscriptPanel : Border {
             for(int i=0;i<next.Length;i++){
                 var segment=next[i];if(!runs.TryGetValue(segment.Key,out var run)){run=new Run{Tag=segment.Key};runs[segment.Key]=run;}
                 string value=(i>0?" ":"")+segment.Text;if(run.Text!=value)run.Text=value;
-                run.ToolTip=segment.Unfinished?"Unfinished recognition retained for reading; not a verified final.":null;run.TextDecorations=segment.Unfinished?TextDecorations.Underline:null;
+                run.ToolTip=segment.Unfinished?"Unfinished recognition retained for reading; not a verified final.":null;run.TextDecorations=null;
                 Inline? desired=preceding==null?paragraph.Inlines.FirstInline:preceding.NextInline;
                 if(!ReferenceEquals(desired,run)){if(run.Parent!=null)paragraph.Inlines.Remove(run);if(preceding==null){if(paragraph.Inlines.FirstInline is {} first)paragraph.Inlines.InsertBefore(first,run);else paragraph.Inlines.Add(run);}else paragraph.Inlines.InsertAfter(preceding,run);}
                 preceding=run;
             }
             if(next.Length==0)paragraph.Inlines.Add(new Run(setup?"Complete speech setup to begin.":state.Sources.ContainsKey(Slot)?"Listening for conversation…":"Choose an audio source in Controls."));
             Text.FontSize=size;Text.Document.FontSize=size;paragraph.LineHeight=size*1.4;paragraph.LineStackingStrategy=LineStackingStrategy.BlockLineHeight;
+            // A removed anchor needs only neighboring keys, never pruned bytes.
+            if(anchor!=null&&!runs.ContainsKey(anchor.Key))anchor=anchor with{OldText=""};
+            if(lastAnchor!=null&&!runs.ContainsKey(lastAnchor.Key))lastAnchor=lastAnchor with{OldText=""};
+            if(pendingAnchor!=null&&!runs.ContainsKey(pendingAnchor.Key))pendingAnchor=pendingAnchor with{OldText=""};
             segments=next;lastSetup=setup;
         }finally{Text.EndChange();}
         if(geometryChanged)QueueRestore(anchor,offset,fontChanged||resetView);
@@ -244,6 +276,7 @@ internal sealed class TranscriptPanel : Border {
     }
     internal bool LatestVisible(){var rect=paragraph.Inlines.OfType<Run>().LastOrDefault()?.ContentEnd.GetCharacterRect(LogicalDirection.Backward);return rect is {} r&&!r.IsEmpty&&r.Top>=-1&&r.Bottom<=Text.ViewportHeight+1;}
     internal (string Key,int Index,double Y)? ReadingMark(){var a=Capture();return a==null?null:(a.Key,a.Index,a.Y);}
+    internal Rect? MarkRect(string key,int index){if(!runs.TryGetValue(key,out var run))return null;var p=run.ContentStart.GetPositionAtOffset(Math.Clamp(index,0,run.Text.Length));var r=p?.GetCharacterRect(LogicalDirection.Forward);return r is{} rect&&!rect.IsEmpty?rect:null;}
     internal double? MarkY(string key,int index){if(!runs.TryGetValue(key,out var run))return null;var p=run.ContentStart.GetPositionAtOffset(Math.Clamp(index,0,run.Text.Length));var r=p?.GetCharacterRect(LogicalDirection.Forward);return r is {} rect&&!rect.IsEmpty?rect.Top:null;}
     internal object[] Geometry()=>geometry.ToArray();
 }

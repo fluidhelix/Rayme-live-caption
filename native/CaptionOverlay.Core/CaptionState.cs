@@ -25,6 +25,7 @@ public sealed class CaptionState {
     readonly HashSet<string> removed = [];
     public List<Choice> Apps { get; private set; } = [];
     public List<Choice> Devices { get; private set; } = [];
+    public long ApplicationsRevision {get;private set;}
     public bool ProcessSupported { get; private set; }
     public bool Paused { get; private set; }
     public string Status { get; private set; } = "Connecting…";
@@ -34,7 +35,7 @@ public sealed class CaptionState {
     static Source? ReadSource(JsonElement e) {
         if (!e.TryGetProperty("source", out var s) || s.ValueKind != JsonValueKind.Object) return null;
         var id = Str(s, "id", 16);
-        return id is "a" or "b" or "device" ? new(id, Num(s, "generation"), HistoryPolicy.SourceName(Str(s, "name", HistoryPolicy.SourceNameLimit+1)), Str(s, "identity", 512)) : null;
+        return id is "a" or "b" or "c" or "d" or "e" or "device" ? new(id, Num(s, "generation"), HistoryPolicy.SourceName(Str(s, "name", HistoryPolicy.SourceNameLimit+1)), Str(s, "identity", 512)) : null;
     }
     static Caption ReadCaption(JsonElement e) => new(ReadSource(e) ?? new("legacy", 0, "Playback output", "legacy"), Num(e, "id"), Flag(e, "final"), HistoryPolicy.Limit(Str(e, "text",HistoryPolicy.TextLimit+1)), e.TryGetProperty("capturedAt", out var time) && time.TryGetDouble(out double at) && double.IsFinite(at) ? at : 0,Num(e,"revision"),Flag(e,"unfinished"));
     static List<Choice> Choices(JsonElement e, string name) => e.TryGetProperty(name, out var list) && list.ValueKind == JsonValueKind.Array
@@ -56,7 +57,7 @@ public sealed class CaptionState {
         string type = Str(e, "type", 40);
         if (type == "snapshot") {
             History.Clear(); Partials.Clear(); Sources.Clear();AudioLevels.Clear(); generations.Clear(); ledgers.Clear(); removed.Clear();
-            Apps = Choices(e, "apps"); Devices = Choices(e, "devices"); ProcessSupported = Flag(e, "processSupported"); Paused = Flag(e, "paused"); Status = Str(e, "status");
+            ApplicationsRevision++;Apps = Choices(e, "apps"); Devices = Choices(e, "devices"); ProcessSupported = Flag(e, "processSupported"); Paused = Flag(e, "paused"); Status = Str(e, "status");
             if (e.TryGetProperty("sources", out var sources)) foreach (var item in sources.EnumerateObject()) Apply(item.Value);
             if (e.TryGetProperty("history", out var history)) foreach (var item in history.EnumerateArray()) {
                 var c = ReadCaption(item);
@@ -76,7 +77,7 @@ public sealed class CaptionState {
             if(e.TryGetProperty("audioLevels",out var levels))foreach(var level in levels.EnumerateObject())Apply(level.Value);
             return;
         }
-        if (type == "applications") { Apps = Choices(e, "apps"); ProcessSupported = Flag(e, "supported"); }
+        if (type == "applications") { ApplicationsRevision++;Apps = Choices(e, "apps"); ProcessSupported = Flag(e, "supported"); }
         if (type == "devices") Devices = Choices(e, "devices");
         if (type == "status") Status = Str(e, "message");
         if (type == "paused") Paused = Flag(e, "paused");

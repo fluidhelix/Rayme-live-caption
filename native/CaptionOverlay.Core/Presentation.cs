@@ -43,7 +43,7 @@ public static class TranscriptPresentation {
         string live=partial?.Text.Trim()??"";
         var header=Header(state,slot);return new(text,live,header.Label,header.Live,header.Unfinished);
     }
-    public static string[] Slots(CaptionState state)=>state.Sources.ContainsKey("device")?["device"]:new[]{"a","b"}.Where(state.Sources.ContainsKey).ToArray();
+    public static string[] Slots(CaptionState state)=>state.Sources.ContainsKey("device")?["device"]:ApplicationSlots.All.Where(state.Sources.ContainsKey).ToArray();
     public static TranscriptSegment[] Segments(CaptionState state,string slot){
         var list=state.History.Where(c=>c.Source.Id==slot).OrderBy(c=>c.CapturedAt).Select(c=>new TranscriptSegment(CaptionPresentation.RowKey(c),c.Unfinished?c.Text:Finish(c.Text),c.Final,c.Unfinished)).ToList();
         if(state.Partials.TryGetValue(slot,out var p)&&p.Text.Trim().Length>0)list.Add(new(CaptionPresentation.RowKey(p),p.Text.Trim(),false));
@@ -65,13 +65,6 @@ public static class WindowInteraction {
 }
 
 public record TranscriptSegment(string Key,string Text,bool Final,bool Unfinished=false);
-public sealed class CaptionLayout {
-    public bool Detached {get;private set;}
-    public static bool CanDetach(CaptionState state)=>TranscriptPresentation.Slots(state).SequenceEqual(new[]{"a","b"});
-    public bool Detach(CaptionState state){if(!CanDetach(state))return false;Detached=true;return true;}
-    public void Reattach()=>Detached=false;
-    public void Synchronize(CaptionState state){if(!CanDetach(state))Detached=false;}
-}
 public static class TextPosition {
     // Preserve positions in unchanged prefixes/suffixes; corrected words map to
     // the nearest surviving boundary. No obsolete text is retained to hold layout.
@@ -83,4 +76,9 @@ public static class TextPosition {
         if(offset>=oldText.Length-suffix)return Math.Clamp(newText.Length-(oldText.Length-offset),0,newText.Length);
         return offset-prefix<=oldText.Length-suffix-offset?prefix:newText.Length-suffix;
     }
+}
+
+// Only first-line layout context survives prefix pruning, never transcript bytes.
+public static class ParagraphContinuation {
+    public static double Indent(double firstX,double oldIndent,double headX,double width)=>new[]{firstX,oldIndent,headX,width}.All(double.IsFinite)&&width>0?Math.Clamp(headX-firstX+oldIndent,0,width):0;
 }

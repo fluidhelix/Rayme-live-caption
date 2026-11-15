@@ -11,6 +11,7 @@ static class Program {
         catch (Exception ex) { Console.Error.WriteLine("FAIL: " + ex.Message); return 1; }
     }
     static void UnitTests() {
+        AccessibilityTests.Run(Check);
         ApprovedDesignTests();
         ReadingTests();
         LifecycleTests();
@@ -231,7 +232,8 @@ static class Program {
                 if (snapshots == 1) { Check(s.Sources.Count == 2 && s.ProcessSupported,"Authenticated initial snapshot"); Check(await client.SendAsync(new { type="refresh" }),"Refresh command sent"); }
                 else if(snapshots==2) { Check(s.History.Count == 2 && s.History.Select(x=>x.Key).Distinct().Count()==2,"Reconnect snapshot does not duplicate finals or restore replaced sources"); await client.SendAsync(new {type="pause",paused=false}); }
                 else if(snapshots==3){Check(s.History.Count==400&&s.History.Count(c=>c.Source.Id=="a")==200&&s.History.Count(c=>c.Source.Id=="b")==200,"Authenticated large reconnect snapshot obeys independent retention budgets");Check(s.History.Single(c=>c.Source.Id=="a"&&c.Id==237) is{Unfinished:true,Final:false}&&s.Partials.Count==0,"Large native snapshot preserves unfinished classification and retirement guards");await client.SendAsync(new{type="configure",slot="a",id="11:101",enabled=true});}
-                else {Check(snapshots==4&&s.History.Where(c=>c.Source.Id=="a").Select(c=>c.Id).SequenceEqual(longNameIds),"Actual long-Unicode-name reconnect preserves live backend/native retention exactly");Check(s.Sources["a"].Source.Name==new string('界',199)&&s.Sources["a"].Source.Identity=="11:101","Wire source-name normalization preserves identity across reconnect");done.TrySetResult();}
+                else if(snapshots==4){Check(s.History.Where(c=>c.Source.Id=="a").Select(c=>c.Id).SequenceEqual(longNameIds),"Actual long-Unicode-name reconnect preserves live backend/native retention exactly");Check(s.Sources["a"].Source.Name==new string('界',199)&&s.Sources["a"].Source.Identity=="11:101","Wire source-name normalization preserves identity across reconnect");await client.SendAsync(new{type="refresh"});}
+                else{Check(snapshots==5&&s.Sources.Count==5&&s.History.Count==1000&&ApplicationSlots.All.All(slot=>s.History.Count(c=>c.Source.Id==slot)==200),"Authenticated five-source reconnect preserves every independent 200-entry history");Check(s.History.All(c=>c.Source.Identity=="five:"+Array.IndexOf(ApplicationSlots.All,c.Source.Id)),"Five-source reconnect never cross-attributes identities");done.TrySetResult();}
             }
             if (type == "status" && doc.RootElement.GetProperty("message").GetString() == "stage-captions") {
                 Check(s.History.Count == 2 && s.Partials.Count == 0 && s.History[0].Source.Id == "a","Interleaved live partials and finals over real WebSocket");
@@ -248,6 +250,7 @@ static class Program {
             if (type == "status" && doc.RootElement.GetProperty("message").GetString() == "stage-reconnect" && !reconnect) { reconnect=true; client.Reconnect(); }
             if(type=="status"&&doc.RootElement.GetProperty("message").GetString()=="stage-retention"){Check(s.History.Count==400&&s.History.Single(c=>c.Source.Id=="a"&&c.Id==237).Unfinished,"Live backend/native history budgets and retained drafts agree before reconnect");client.Reconnect();}
             if (type == "status" && doc.RootElement.GetProperty("message").GetString() == "stage-complete") { Check(snapshots==3,"Exactly two requested reconnects before long-name coverage");Check(s.History.Count==400&&s.History.Single(c=>c.Source.Id=="a"&&c.Id==237) is{Final:true,Unfinished:false},"Fresh final replaces a retained snapshot draft without duplicating native history");await client.SendAsync(new{type="refresh"}); }
+            if(type=="status"&&doc.RootElement.GetProperty("message").GetString()=="stage-five-source"){Check(s.Sources.Count==5&&s.History.Count==1000&&ApplicationSlots.All.All(slot=>s.History.Count(c=>c.Source.Id==slot)==200),"Live five-source authenticated session agrees with backend retention before reconnect");client.Reconnect();}
             if(type=="status"&&doc.RootElement.GetProperty("message").GetString()=="stage-long-name"){longNameIds=doc.RootElement.GetProperty("retainedIds").EnumerateArray().Select(v=>v.GetInt64()).ToArray();Check(longNameIds.Length<200&&s.History.Where(c=>c.Source.Id=="a").Select(c=>c.Id).SequenceEqual(longNameIds),"Live native and backend byte-budget decisions agree for a long Unicode source name");client.Reconnect();}
         }, _ => Task.CompletedTask);
         var winner = await Task.WhenAny(done.Task,run,Task.Delay(30000));

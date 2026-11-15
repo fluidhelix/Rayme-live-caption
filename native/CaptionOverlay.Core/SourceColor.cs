@@ -1,7 +1,7 @@
 using System.Globalization;
 namespace Rayme.Overlay;
 public static class SourceColor {
-    public static string Default(string slot)=>slot=="a"?"#80DFFF":slot=="b"?"#FFD68A":"#CBB9FF";
+    public static string Default(string slot)=>slot switch{"a"=>"#80DFFF","b"=>"#FFD68A","d"=>"#9CE9BA","e"=>"#FFB8D2",_=>"#CBB9FF"};
     public static bool TryHex(string? value,out string normalized){normalized="";if(value?.Length!=7||value[0]!='#'||!uint.TryParse(value.AsSpan(1),NumberStyles.HexNumber,CultureInfo.InvariantCulture,out _))return false;normalized=value.ToUpperInvariant();return true;}
     public static (byte R,byte G,byte B) Rgb(string hex){uint n=uint.Parse(hex.AsSpan(1),NumberStyles.HexNumber,CultureInfo.InvariantCulture);return((byte)(n>>16),(byte)(n>>8),(byte)n);}
     public static (double H,double S,double V) Hsv(string hex){var(r,g,b)=Rgb(hex);double R=r/255d,G=g/255d,B=b/255d,max=Math.Max(R,Math.Max(G,B)),min=Math.Min(R,Math.Min(G,B)),d=max-min,h=d==0?0:max==R?60*((G-B)/d%6):max==G?60*((B-R)/d+2):60*((R-G)/d+4);return((h+360)%360,max==0?0:d/max,max);}

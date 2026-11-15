@@ -74,6 +74,71 @@ internal sealed partial class OverlayWindow {
         await CaptionStabilitySmoke(output);
         await ReadingViewportSmoke(output);
         await AuditInputSmoke(output);
+        await AccessibilityWindowSmoke();
+        await PruningGeometrySmoke(output);
+    }
+    async Task AccessibilityWindowSmoke(){
+        OpenControls();state.Apply("""{"type":"paused","paused":false}""");
+        while(prefs.VisibleApplications.Length<5)Click(addApplication!);
+        UiCheck(selectors.Keys.Count(k=>k!="device")==5&&addApplication!.Visibility==Visibility.Collapsed,"Progressive native controls stop at five visible slots");
+        var oldA=selectors["a"].Select.SelectedValue;
+        RemoveApplicationSlot("e");UiCheck(!selectors.ContainsKey("e")&&selectors["a"].Select.SelectedValue?.Equals(oldA)==true,"Removing an unused optional card preserves the configured A selector");
+        Click(addApplication!);UiCheck(selectors.ContainsKey("e"),"Add restores only the next missing optional application card");
+        foreach(string slot in new[]{"c","d","e"}){
+            state.Apply(JsonSerializer.Serialize(new{type="source-status",source=new{id=slot,generation=1,name="App "+slot,identity="test-"+slot},state="waiting",message="Listening"}));
+            state.Apply(JsonSerializer.Serialize(new{type="caption",source=new{id=slot,generation=1,name="App "+slot,identity="test-"+slot},id=1,revision=1,final=false,text="maybe",capturedAt=10}));
+        }
+        Render();await AwaitPanels(panels.Values.ToArray());
+        UiCheck(captions.Children.Count==2&&detached.Keys.Order().SequenceEqual(new[]{"c","d","e"}),"Extra sources start in standalone windows beside the ordinary A/B pair");
+        var sourceB=state.Sources["b"];var beforeSingle=DesktopPlacement.Read(handle);state.Sources.Remove("b");Render();UpdateSettings();await AwaitPanels(panels.Values.ToArray());
+        UiCheck(rootGroup=="a"&&rootProfile=="a+b"&&captions.Children.Count==1&&DesktopPlacement.Read(handle)==beforeSingle&&lockSetting!.Visibility==Visibility.Visible,"A plus extra standalone apps keeps the attached host in place and its Settings lock accessible");
+        state.Sources["b"]=sourceB;Render();UpdateSettings();await AwaitPanels(panels.Values.ToArray());
+        int commands=smokeCommands.Count;var history=state.History.Select(c=>c.Key).ToArray();var origins=state.Sources.ToDictionary(p=>p.Key,p=>p.Value.Source);
+        var work=DesktopPlacement.Displays().First().Work;
+        var aBounds=Preferences.Recover(new(work.X+20,work.Y+20,520,300),DesktopPlacement.Displays());
+        var cBounds=Preferences.Recover(new(work.X+100,work.Y+200,410,230),DesktopPlacement.Displays());
+        DesktopPlacement.Apply(handle,aBounds);DesktopPlacement.Apply(new System.Windows.Interop.WindowInteropHelper(detached["c"]).Handle,cBounds);await AwaitPanels(panels.Values.ToArray());
+        var beforeRoot=DesktopPlacement.Read(handle);var beforeC=detached["c"].Placement().Placement;
+        var sameC=panels["c"];AttachSource("c","b");await AwaitPanels(panels.Values.ToArray());
+        UiCheck(rootGroup=="a+c"&&captions.Children[0]==panels["a"]&&captions.Children[1]==sameC,"Selecting occupied lower B exchanges C into the exact lower position");
+        UiCheck(DesktopPlacement.Read(handle)==beforeRoot&&detached["b"].Placement().Placement==beforeC,"Displaced B inherits C's prior physical window bounds while the pair stays in place");
+        UiCheck(PairingFor("b")==PairingMode.Choose&&PairingFor(rootGroup)==PairingMode.Detach&&toolbar.Layout.Content is Viewbox,"Pairing icons reflect ambiguous standalone and paired contexts");
+        PairingAction("b",detached["b"].Toolbar.Layout);var menu=detached["b"].Toolbar.Layout.ContextMenu;
+        UiCheck(menu?.IsOpen==true&&menu.Items.Count==4,"Pairing menu offers all four eligible applications without a confirmation dialog");menu!.IsOpen=false;
+        AttachSource("b","a");await AwaitPanels(panels.Values.ToArray());UiCheck(rootGroup=="b+c"&&captions.Children[0]==panels["b"],"Selecting upper A exchanges B into the upper position");
+        var attached=DesktopPlacement.Read(handle);
+        for(int turn=0;turn<3;turn++){
+            SeparateGroup(rootGroup);await AwaitPanels(panels.Values.ToArray());var savedB=detached["b"].Placement().Placement;var savedC=detached["c"].Placement().Placement;
+            AttachSource("c","b");await AwaitPanels(panels.Values.ToArray());UiCheck(DesktopPlacement.Read(handle)==attached,"Repeated attach restores the pair's own saved bounds");
+            SeparateGroup(rootGroup);await AwaitPanels(panels.Values.ToArray());UiCheck(detached["b"].Placement().Placement==savedB&&detached["c"].Placement().Placement==savedC,"Repeated detach restores both independent saved bounds");
+            AttachSource("c","b");await AwaitPanels(panels.Values.ToArray());
+        }
+        UiCheck(smokeCommands.Count==commands&&history.SequenceEqual(state.History.Select(c=>c.Key))&&origins.All(p=>state.Sources[p.Key].Source==p.Value),"Grouping never sends backend commands, loses history or changes source identities");
+        foreach(string routine in new[]{"waiting","capturing","transcribing"}){panels["a"].Availability(new(origins["a"],routine,"Routine"),false,true);UiCheck(panels["a"].AvailabilityText=="Available","Routine source state leaves availability stable: "+routine);}
+        panels["a"].Availability(new(origins["a"],"unavailable","Application exited"),false,true);UiCheck(panels["a"].AvailabilityText=="Unavailable","Exited application remains visibly unavailable");
+        state.Apply("""{"type":"segment-retired","source":{"id":"c","generation":1,"name":"App c","identity":"test-c"},"id":1,"revision":2,"terminal":true,"retain":true}""");Render();await AwaitPanels(panels.Values.ToArray());
+        UiCheck(state.History.Any(c=>c.Source.Id=="c"&&c.Unfinished&&!c.Final)&&!panels["c"].HasDraftDecoration&&!Descendants<TextBlock>(panels["c"]).Any(t=>t.Text is "LIVE" or "DRAFT"),"Short retained recognition keeps DRAFT semantics without underlining or a header badge");
+        foreach(string slot in new[]{"c","d","e"})state.Apply(JsonSerializer.Serialize(new{type="source-removed",source=new{id=slot,generation=1,name="App "+slot,identity="test-"+slot}}));
+        Reattach();Render();await AwaitPanels(panels.Values.ToArray());UiCheck(detached.Count==0&&captions.Children.Count==2,"Removing extra applications restores the familiar single A/B caption window");
+    }
+    async Task PruningGeometrySmoke(string output){
+        foreach(double width in new[]{360d,540d,720d})foreach(double size in new[]{18d,30d}){
+            var sample=new CaptionState();long revision=0;
+            void Caption(int id,bool final,string text)=>sample.Apply(JsonSerializer.Serialize(new{type="caption",source=new{id="a",generation=1,name="Pruning geometry",identity="pruning"},id,revision=++revision,final,text,capturedAt=id}));
+            for(int id=1;id<=200;id++)Caption(id,true,$"entry{id:0000} "+string.Join(" ",Enumerable.Repeat(id%2==0?"wide conversation words":"thin iii maybe",2+id%3)));
+            var panel=new TranscriptPanel("a",true);var window=new Window{Width=width,Height=300,Content=panel,Owner=this,ShowInTaskbar=false};window.Show();panel.Update(sample,size,"#80DFFF",false);await AwaitPanels(panel);
+            panel.ReaderNavigating();panel.Scroll.ScrollToVerticalOffset(panel.ScrollableHeight*.5);await AwaitPanels(panel);
+            for(int id=201;id<=212;id++){
+                var mark=panel.ReadingMark()??throw new Exception("Missing repeated-pruning anchor");var rect=panel.MarkRect(mark.Key,mark.Index)??throw new Exception("Missing glyph bounds");
+                Caption(id,false,"maybe provisional correction");panel.Update(sample,size,"#80DFFF",false);await AwaitPanels(panel);
+                Caption(id,true,"Accurately corrected new sentence "+id);panel.Update(sample,size,"#80DFFF",false);await AwaitPanels(panel);
+                var after=panel.MarkRect(mark.Key,mark.Index)??throw new Exception("Surviving pruning anchor disappeared");
+                CaptionCheck(!panel.Following&&Math.Abs(after.X-rect.X)<1&&Math.Abs(after.Y-rect.Y)<1,"Repeated prefix pruning preserves actual surviving glyph X/Y at width "+width+" font "+size,panel);
+                CaptionCheck(sample.History.Count==200&&panel.RenderedSegments==200&&!panel.PlainText.Contains("entry0001")&&!panel.HasPrunedAnchorText&&panel.ContinuationIndent>=0&&panel.ContinuationIndent<=panel.Text.ViewportWidth,"Pruned bytes and Runs are released; only one bounded first-line continuation remains",panel);
+            }
+            panel.Text.SelectAll();UiCheck(!panel.Text.Selection.IsEmpty&&panel.Text.Document.Blocks.Count==1,"Pruning keeps one continuous selectable paragraph, not caption cards");
+            window.Close();
+        }
     }
     async Task AuditInputSmoke(string output){
         var sample=new CaptionState();long revision=1;string currentDraft="";
@@ -109,6 +174,11 @@ internal sealed partial class OverlayWindow {
         // One/two-line gestures use the real editor/scrollbar route, including
         // a layout pass between thumb movement and its EndScroll notification.
         foreach(string gesture in new[]{"one-line key","single wheel","small thumb","fractional thumb"}){
+            // Hidden production scrollbars have no interactive thumb geometry.
+            // Expose a bar only in this isolated legacy thumb-route probe;
+            // wheel, keyboard and all ordinary production checks stay hidden.
+            bool thumbProbe=gesture.Contains("thumb",StringComparison.Ordinal);
+            if(thumbProbe){panel.Text.VerticalScrollBarVisibility=ScrollBarVisibility.Visible;await AwaitPanels(panel);}
             await Bottom();double start=panel.Text.VerticalOffset;
             if(gesture=="one-line key")RoutedKey(panel,Key.Up);
             else if(gesture=="single wheel")RoutedWheel(panel,120);
@@ -126,6 +196,7 @@ internal sealed partial class OverlayWindow {
             var smallMark=panel.ReadingMark()??throw new Exception("Missing small gesture reading anchor");
             Caption(13,currentDraft+" additional speech",false);Paint();await AwaitPanels(panel);
             Check(!panel.Following&&Math.Abs((panel.MarkY(smallMark.Key,smallMark.Index)??double.MaxValue)-smallMark.Y)<1,"Small reader movement survives subsequent speech: "+gesture);
+            if(thumbProbe){panel.Text.VerticalScrollBarVisibility=ScrollBarVisibility.Hidden;await AwaitPanels(panel);}
         }
         await Bottom();double returnBottom=panel.Text.VerticalOffset;
         RoutedKey(panel,Key.Up);RoutedKey(panel,Key.Up);
@@ -153,12 +224,14 @@ internal sealed partial class OverlayWindow {
         await Bottom();before=panel.Text.VerticalOffset;ScrollBar.PageUpCommand.Execute(null,bar);
         await Wait(()=>!panel.ScrollWorkPending&&!panel.Following&&panel.Text.VerticalOffset<before-1,"actual scrollbar PageUp interaction");
         Check(!panel.Following,"Scrollbar commands produce reader intent without a blanket ScrollChanged heuristic");
+        panel.Text.VerticalScrollBarVisibility=ScrollBarVisibility.Visible;await AwaitPanels(panel);
         await Bottom();before=panel.Text.VerticalOffset;var thumb=Descendants<Thumb>(bar).Single();
         thumb.RaiseEvent(new DragStartedEventArgs(0,0){RoutedEvent=Thumb.DragStartedEvent});
         thumb.RaiseEvent(new DragDeltaEventArgs(0,-120){RoutedEvent=Thumb.DragDeltaEvent});
         thumb.RaiseEvent(new DragCompletedEventArgs(0,-120,false){RoutedEvent=Thumb.DragCompletedEvent});
         await Wait(()=>!panel.ScrollWorkPending&&!panel.Following&&panel.Text.VerticalOffset<before-1,"routed scrollbar thumb drag lifecycle");
         Check(!panel.Following,"Handled scrollbar thumb events retain reader intent through drag completion");
+        panel.Text.VerticalScrollBarVisibility=ScrollBarVisibility.Hidden;await AwaitPanels(panel);
         await Bottom();panel.Text.Focus();before=panel.Text.VerticalOffset;RoutedKey(panel,Key.PageUp);
         await Wait(()=>!panel.ScrollWorkPending&&!panel.Following&&panel.Text.VerticalOffset<before-1,"routed keyboard PageUp");
         Check(!panel.Following,"Native routed keyboard navigation leaves live-follow mode");

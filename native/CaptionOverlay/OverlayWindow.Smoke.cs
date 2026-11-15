@@ -41,7 +41,8 @@ internal sealed partial class OverlayWindow {
             state.Apply(partial);connectionText="Connected";Render();OpenControls();await Task.Delay(180);UpdateLayout();controls!.UpdateLayout();
             UiCheck(captions.Children.Count==2&&ActualWidth>=MinWidth&&controls.IsLoaded,"Overlay and modern Controls construct with two fixed attributed transcript panels");
             var row=panels["b"];double height=row.ActualHeight;
-            UiCheck(row.IsLive&&row.Text.FontStyle==FontStyles.Normal&&row.Text.FontWeight==FontWeights.Normal,"Partial captions use normal typography with a LIVE badge");
+            UiCheck(row.IsLive&&row.Text.FontStyle==FontStyles.Normal&&row.Text.FontWeight==FontWeights.Normal,"Partial captions keep normal typography and internal live classification without a header badge");
+            UiCheck(!Descendants<TextBlock>(row).Any(t=>t.Text is "LIVE" or "DRAFT")&&!row.HasDraftDecoration&&row.Text.VerticalScrollBarVisibility==ScrollBarVisibility.Hidden,"Caption header has no LIVE/DRAFT badge or reserved scrollbar gutter");
             Capture(this,Path.Combine(output,"overlay-partial.png"));
             state.Apply(partial.Replace("\"final\":false","\"final\":true"));Render();UpdateLayout();
             UiCheck(ReferenceEquals(row,panels["b"])&&!row.IsLive&&captions.Children.Count==2,"Finalization reuses the same transcript panel without duplicates");

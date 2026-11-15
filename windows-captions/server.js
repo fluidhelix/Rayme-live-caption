@@ -103,7 +103,7 @@ async function createUI({ port = 8090, onSelect, onRefresh, onConfigure, onPause
         if (msg.type === 'clear') publish({ type: 'cleared' });
         if (msg.type === 'pause' && typeof msg.paused === 'boolean') act(onPause?.(msg.paused));
         if (msg.type === 'setup' && ['select','download','retry','mode'].includes(msg.action) && (msg.path === undefined || typeof msg.path === 'string' && msg.path.length <= 4096)) act(onSetup?.(msg));
-        if (msg.type === 'configure' && ['a','b','device'].includes(msg.slot)) {
+        if (msg.type === 'configure' && ['a','b','c','d','e','device'].includes(msg.slot)) {
           let descriptor = null;
           if (msg.enabled === true) {
             if (msg.slot === 'device') {

@@ -20,20 +20,51 @@ public sealed record Preferences {
     public string ColorDevice { get; init; } = "#CBB9FF";
     public CaptionPlacement DetachedA {get;init;}=new();
     public CaptionPlacement DetachedB {get;init;}=new();
+    public CaptionPlacement DetachedC {get;init;}=new();
+    public CaptionPlacement DetachedD {get;init;}=new();
+    public CaptionPlacement DetachedE {get;init;}=new();
+    public CaptionPlacement DeviceWindow {get;init;}=new();
+    public string ColorC {get;init;}="#CBB9FF";
+    public string ColorD {get;init;}="#9CE9BA";
+    public string ColorE {get;init;}="#FFB8D2";
+    public string[] VisibleApplications {get;init;}=["a"];
+    public string[][] Pairings {get;init;}=[["a","b"]];
+    public Dictionary<string,string[]> PairOrders {get;init;}=new(){{"a+b",["a","b"]}};
+    public Dictionary<string,CaptionPlacement> AttachedLayouts {get;init;}=[];
     public Bounds? Placement { get; init; }
     public string? Monitor { get; init; }
     static double Limit(double n, double fallback, double low, double high) => double.IsFinite(n) ? Math.Clamp(n, low, high) : fallback;
     static string Color(string? color, string fallback) => color != null && Regex.IsMatch(color, "^#[0-9A-Fa-f]{6}$") ? color : fallback;
     public static Bounds? ValidBounds(Bounds? b)=>b is not null&&new[]{b.X,b.Y,b.Width,b.Height}.All(double.IsFinite)&&b.Width>0&&b.Height>0?b:null;
-    public CaptionPlacement ForSource(string slot)=>slot=="a"?DetachedA:DetachedB;
-    public Preferences WithSource(string slot,CaptionPlacement value)=>slot=="a"?this with{DetachedA=value.Validate()}:this with{DetachedB=value.Validate()};
+    public string ColorFor(string slot)=>slot switch{"a"=>ColorA,"b"=>ColorB,"c"=>ColorC,"d"=>ColorD,"e"=>ColorE,_=>ColorDevice};
+    public Preferences WithColor(string slot,string color)=>slot switch{"a"=>this with{ColorA=color},"b"=>this with{ColorB=color},"c"=>this with{ColorC=color},"d"=>this with{ColorD=color},"e"=>this with{ColorE=color},"device"=>this with{ColorDevice=color},_=>throw new ArgumentException("Unknown source")};
+    public CaptionPlacement ForSource(string slot)=>slot switch{"a"=>DetachedA,"b"=>DetachedB,"c"=>DetachedC,"d"=>DetachedD,"e"=>DetachedE,"device"=>DeviceWindow,_=>throw new ArgumentException("Unknown source")};
+    public Preferences WithSource(string slot,CaptionPlacement value)=>slot switch{"a"=>this with{DetachedA=value.Validate()},"b"=>this with{DetachedB=value.Validate()},"c"=>this with{DetachedC=value.Validate()},"d"=>this with{DetachedD=value.Validate()},"e"=>this with{DetachedE=value.Validate()},"device"=>this with{DeviceWindow=value.Validate()},_=>throw new ArgumentException("Unknown source")};
+    public CaptionPlacement ForArrangement(string key)=>ApplicationSlots.PairKey(key)?AttachedLayouts.GetValueOrDefault(key)??(key=="a+b"?new(Placement,Monitor,Locked):new()):ForSource(key);
+    public Preferences WithArrangement(string key,CaptionPlacement value){
+        if(!ApplicationSlots.PairKey(key))return WithSource(key,value);
+        var layouts=new Dictionary<string,CaptionPlacement>(AttachedLayouts){[key]=value.Validate()};
+        return key=="a+b"?this with{AttachedLayouts=layouts,Placement=value.Placement,Monitor=value.Monitor}:this with{AttachedLayouts=layouts};
+    }
     public Preferences Validate() => this with {
         Version = 1, FontSize = Limit(FontSize, 26, 16, 60), BackgroundOpacity = Limit(BackgroundOpacity, .9, .70, 1),
         ColorA = Color(ColorA, "#80DFFF"), ColorB = Color(ColorB, "#FFD68A"), ColorDevice = Color(ColorDevice, "#CBB9FF"),
         DetachedA=(DetachedA??new()).Validate(),DetachedB=(DetachedB??new()).Validate(),
+        DetachedC=(DetachedC??new()).Validate(),DetachedD=(DetachedD??new()).Validate(),DetachedE=(DetachedE??new()).Validate(),DeviceWindow=(DeviceWindow??new()).Validate(),
+        ColorC=Color(ColorC,SourceColor.Default("c")),ColorD=Color(ColorD,SourceColor.Default("d")),ColorE=Color(ColorE,SourceColor.Default("e")),
+        VisibleApplications=ApplicationSlots.All.Where(s=>s=="a"||(VisibleApplications??[]).Contains(s)).ToArray(),
+        Pairings=new CaptionLayout(Pairings??[],PairOrders).Pairings,
+        PairOrders=new CaptionLayout(Pairings??[],PairOrders).Orders,
+        AttachedLayouts=(AttachedLayouts??[]).Where(p=>ApplicationSlots.PairKey(p.Key)).Take(20).ToDictionary(p=>p.Key,p=>(p.Value??new()).Validate()),
         Placement = ValidBounds(Placement),
         Monitor = Monitor?.Length <= 128 ? Monitor : null
     };
+    // Records compare collection fields by reference by default; preferences
+    // retain value equality across validation and JSON round-trips.
+    public bool Equals(Preferences? other)=>other!=null&&Version==other.Version&&FontSize==other.FontSize&&BackgroundOpacity==other.BackgroundOpacity&&Topmost==other.Topmost&&Locked==other.Locked&&Placement==other.Placement&&Monitor==other.Monitor&&
+        ApplicationSlots.All.Append("device").All(s=>ForSource(s)==other.ForSource(s)&&ColorFor(s)==other.ColorFor(s))&&
+        VisibleApplications.SequenceEqual(other.VisibleApplications)&&Pairings.Select(ApplicationSlots.Key).SequenceEqual(other.Pairings.Select(ApplicationSlots.Key))&&AttachedLayouts.OrderBy(p=>p.Key).SequenceEqual(other.AttachedLayouts.OrderBy(p=>p.Key))&&PairOrders.OrderBy(p=>p.Key).Select(p=>p.Key+":"+ApplicationSlots.Key(p.Value)).SequenceEqual(other.PairOrders.OrderBy(p=>p.Key).Select(p=>p.Key+":"+ApplicationSlots.Key(p.Value)));
+    public override int GetHashCode()=>HashCode.Combine(Version,FontSize,BackgroundOpacity,Topmost,Locked,Placement,Monitor,ColorA);
     public static Preferences Parse(string json) {
         try { var p = JsonSerializer.Deserialize<Preferences>(json); return p?.Version == 1 ? p.Validate() : new(); }
         catch (JsonException) { return new(); }
@@ -43,7 +74,7 @@ public sealed record Preferences {
         catch (IOException) { return new(); } catch (UnauthorizedAccessException) { return new(); }
     }
     public bool Save(string file) {
-        try { Directory.CreateDirectory(Path.GetDirectoryName(file)!); File.WriteAllText(file + ".tmp", JsonSerializer.Serialize(Validate(), new JsonSerializerOptions { WriteIndented = true })); File.Move(file + ".tmp", file, true); return true; }
+        try { var json=JsonSerializer.Serialize(Validate(),new JsonSerializerOptions{WriteIndented=true});if(System.Text.Encoding.UTF8.GetByteCount(json)>16384)return false;Directory.CreateDirectory(Path.GetDirectoryName(file)!); File.WriteAllText(file + ".tmp", json); File.Move(file + ".tmp", file, true); return true; }
         catch (IOException) { return false; } catch (UnauthorizedAccessException) { return false; }
     }
     public static Bounds Recover(Bounds? saved, IReadOnlyList<Display> displays, string? preferred = null) {
