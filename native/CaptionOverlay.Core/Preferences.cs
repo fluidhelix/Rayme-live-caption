@@ -46,6 +46,12 @@ public sealed record Preferences {
         var layouts=new Dictionary<string,CaptionPlacement>(AttachedLayouts){[key]=value.Validate()};
         return key=="a+b"?this with{AttachedLayouts=layouts,Placement=value.Placement,Monitor=value.Monitor}:this with{AttachedLayouts=layouts};
     }
+    public Preferences InitializeWindowProfiles(){
+        // Materialize legacy attached lock/placement before a different active
+        // root window updates the legacy Locked field during session startup.
+        var next=WithArrangement("a+b",ForArrangement("a+b"));
+        return DeviceWindow.Placement==null?next with{DeviceWindow=new(Placement,Monitor,Locked)}:next;
+    }
     public Preferences Validate() => this with {
         Version = 1, FontSize = Limit(FontSize, 26, 16, 60), BackgroundOpacity = Limit(BackgroundOpacity, .9, .70, 1),
         ColorA = Color(ColorA, "#80DFFF"), ColorB = Color(ColorB, "#FFD68A"), ColorDevice = Color(ColorDevice, "#CBB9FF"),

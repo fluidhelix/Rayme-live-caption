@@ -26,7 +26,7 @@ For example, with A+B paired and C standalone:
 - Two standalone sources use their saved attached profile and remembered vertical order; if none exists, the target placement seeds the new pair.
 - Separating a pair restores each source's independent standalone placement, size, monitor and lock.
 
-Pair placements are distinct from DetachedA–E. Up to twenty ordered pair profiles and ten pair-order entries are bounded; current membership and visible card slots are persisted. Old version-1 A/B colors, combined Placement/Monitor, DetachedA/B and custom preferences migrate additively. Preferences retain value equality across serialization. The existing 16-KiB settings-file limit is retained; oversized saves fail before overwriting a valid file.
+Pair placements are distinct from DetachedA–E. Up to twenty ordered pair profiles and ten pair-order entries are bounded; current membership and visible card slots are persisted. Old version-1 A/B colors, combined Placement/Monitor, DetachedA/B and custom preferences migrate additively. The legacy attached lock/placement is materialized before startup switches to whole-device mode, so the mutable active-window lock cannot overwrite it. Preferences retain value equality across serialization. The existing 16-KiB settings-file limit is retained; oversized saves fail before overwriting a valid file.
 
 A single remaining member of an attached pair can continue using that attached placement profile. Merely disabling its partner does not overwrite the saved detached position. Detach and Attach switch between the separate profiles. Removing extra sources leaves the familiar A/B arrangement available. Monitor recovery reuses existing documented Windows placement/DPI APIs; a loaded peer is recovered from its current physical bounds rather than forcing its old saved monitor during a move.
 
@@ -71,7 +71,7 @@ The pruning change supplies paragraph line context before those existing mechani
 | Check | Result |
 | --- | --- |
 | Full Node suite, including package integrity/release guard and original Discord boundary tests | **111 PASS**, no failures/skips |
-| Native core/state/preferences/grouping/history suite | **294 assertions PASS** |
+| Native core/state/preferences/grouping/history suite | **296 assertions PASS** |
 | Actual .NET ClientWebSocket against production authenticated Node server | **22 assertions PASS**, including five-source live history and reconnect |
 | Existing Chromium source/control/history integration | **PASS** |
 | New progressive five-application Chromium integration | **PASS** |

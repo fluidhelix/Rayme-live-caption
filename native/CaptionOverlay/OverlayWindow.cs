@@ -56,7 +56,7 @@ internal sealed partial class OverlayWindow : Window {
     static SolidColorBrush Brush(string color) => new((Color)ColorConverter.ConvertFromString(color));
     static Button Action(string text, RoutedEventHandler handler) => Theme.Button(text,handler);
     public OverlayWindow(SessionClient? session, bool isSmoke = false) {
-        client = session; smoke = isSmoke;transportConnected=isSmoke; prefs = smoke ? new() : Preferences.Load(settingsFile);layout=new(prefs.Pairings,prefs.PairOrders);
+        client = session; smoke = isSmoke;transportConnected=isSmoke; prefs = (smoke ? new Preferences() : Preferences.Load(settingsFile)).InitializeWindowProfiles();layout=new(prefs.Pairings,prefs.PairOrders);
         Icon = new BitmapImage(Theme.IconUri); Title = "Rayme Smart Live Captions"; Width = 640; Height = 360; MinWidth = 300; MinHeight = 180;
         WindowStyle = WindowStyle.None; ResizeMode = ResizeMode.CanResizeWithGrip; AllowsTransparency = true;
         Background = Brushes.Transparent; Foreground = Brushes.White; FontFamily = new FontFamily("Segoe UI Variable Text, Segoe UI");

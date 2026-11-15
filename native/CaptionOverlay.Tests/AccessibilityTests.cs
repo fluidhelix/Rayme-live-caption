@@ -32,6 +32,9 @@ internal static class AccessibilityTests {
         check(new Preferences().VisibleApplications.SequenceEqual(new[]{"a"}),"First-run preferences show only Application A");
         var top=new CaptionPlacement(new(-1200,-900,600,400),"upper",true);var leftA=new CaptionPlacement(new(-1800,200,400,240),"left");var leftB=new CaptionPlacement(new(-1800,500,420,260),"left",true);
         var prefs=new Preferences{Placement=top.Placement,Monitor=top.Monitor,Locked=true,DetachedA=leftA,DetachedB=leftB};
+        var startup=prefs.InitializeWindowProfiles() with{Locked=false};
+        check(startup.ForArrangement("a+b").Locked&&startup.ForArrangement("a+b").Placement==top.Placement,"Switching the startup root cannot overwrite a legacy attached lock or placement");
+        check(startup.DeviceWindow.Locked&&startup.DeviceWindow.Placement==top.Placement,"Previously unsaved whole-device placement migrates from the legacy main window");
         prefs=prefs.WithArrangement("a+b",top).WithArrangement("c+e",new(new(500,100,720,320),"main"));
         var exchange=PairingPlacement.Attach(prefs,"a+c","b",true,leftA,top);
         check(exchange.ForArrangement("a+c")==top&&exchange.ForSource("b")==leftA&&exchange.ForArrangement("a+b")==top&&exchange.ForSource("a")==leftA,"Placement exchange moves the displaced source to the initiating window and preserves other arrangements");
