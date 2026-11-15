@@ -94,7 +94,7 @@ static class Program{
         try{
             AutomationElement[] CaptionWindows()=>AutomationElement.RootElement.FindAll(TreeScope.Children,new PropertyCondition(AutomationElement.ProcessIdProperty,pid)).Cast<AutomationElement>().Where(w=>w.FindFirst(TreeScope.Descendants,new PropertyCondition(AutomationElement.ControlTypeProperty,ControlType.Document))!=null).ToArray();
             AutomationElement Button(AutomationElement root,string name)=>root.FindFirst(TreeScope.Descendants,new AndCondition(new PropertyCondition(AutomationElement.NameProperty,name),new PropertyCondition(AutomationElement.ControlTypeProperty,ControlType.Button)))??throw new Exception("Missing control: "+name);
-            var main=FindWindow(pid,"Rayme Smart Live Captions");var detach=Button(main,"Detach captions");Until(()=>detach.Current.IsEnabled,"Both enabled sources can detach");
+            var main=FindWindow(pid,"Rayme Smart Live Captions");var detach=Button(main,"Detach windows");Until(()=>detach.Current.IsEnabled,"Both enabled sources can detach");
             Check(CaptionWindows().Length==1,"Packaged overlay starts combined");Invoke(detach);Until(()=>CaptionWindows().Length==2,"Two real detached HWNDs");
             var windows=CaptionWindows();Invoke(Button(windows[0],"Lock overlay position"));Until(()=>windows[0].FindFirst(TreeScope.Descendants,new PropertyCondition(AutomationElement.NameProperty,"Unlock overlay position"))!=null,"Independent detached lock");
             // WPF omits TransformPattern on a non-resizable frameless window.
@@ -107,8 +107,8 @@ static class Program{
             Until(()=>windows[1].Current.BoundingRectangle.Width>other.Width&&windows[1].Current.BoundingRectangle.Height>other.Height,"Second packaged window actually resized");
             Check(windows[0].Current.BoundingRectangle==before,"Resizing the second packaged window preserves the first placement");
             Invoke(Button(windows[0],"Open Controls"));Invoke(Find(pid,"Close Controls",ControlType.Button));Check(CaptionWindows().Length==2,"Closing detached Controls preserves both captions");
-            Invoke(Button(windows[1],"Reattach captions"));Until(()=>CaptionWindows().Length==1,"Real packaged reattachment");main=FindWindow(pid,"Rayme Smart Live Captions");
-            Check(!Process.GetProcessById(pid).HasExited,"Layout transitions do not trigger Quit Rayme");Invoke(Button(main,"Detach captions"));Until(()=>CaptionWindows().Length==2,"Detach again for parent-pipe EOF cleanup");
+            Invoke(Button(windows[1],"Attach windows"));Until(()=>CaptionWindows().Length==1,"Real packaged reattachment");main=FindWindow(pid,"Rayme Smart Live Captions");
+            Check(!Process.GetProcessById(pid).HasExited,"Layout transitions do not trigger Quit Rayme");Invoke(Button(main,"Detach windows"));Until(()=>CaptionWindows().Length==2,"Detach again for parent-pipe EOF cleanup");
             Console.WriteLine("PASS: packaged detached windows, independent resize/lock, Controls and reattachment; left detached for EOF teardown");return 0;
         }catch(Exception error){Console.Error.WriteLine(error);return 1;}
     }
