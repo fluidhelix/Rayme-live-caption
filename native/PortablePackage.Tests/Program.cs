@@ -13,6 +13,10 @@ static class Program{
     static int sessionNumber;
     static string Sanitize(string text)=>text.Replace(package,"[package]").Replace(data,"[settings]").Replace(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),"[profile]");
     [DllImport("user32.dll")]static extern bool PostMessage(IntPtr window,uint message,IntPtr w,IntPtr l);
+    [DllImport("user32.dll")]static extern bool IsWindowVisible(IntPtr window);
+    [StructLayout(LayoutKind.Sequential)]struct TrayIconIdentifier{public uint Size;public IntPtr Window;public uint Id;public Guid Guid;}
+    [StructLayout(LayoutKind.Sequential)]struct NativeRect{public int Left,Top,Right,Bottom;}
+    [DllImport("shell32.dll")]static extern int Shell_NotifyIconGetRect(ref TrayIconIdentifier icon,out NativeRect rect);
     [DllImport("user32.dll",EntryPoint="GetWindowLongW")]static extern int WindowStyle(IntPtr window,int index);
     [DllImport("user32.dll",SetLastError=true)]static extern bool SetWindowPos(IntPtr window,IntPtr after,int x,int y,int width,int height,uint flags);
     static void Check(bool value,string why){if(!value)throw new Exception(why);checks++;Console.WriteLine("PASS "+why);}
@@ -58,9 +62,19 @@ static class Program{
                 Invoke(Find(pid,"Close Controls",ControlType.Button));
                 Check(!session.Process.HasExited,"Closing Controls does not end captioning");
                 var window=FindWindow(pid,"Rayme Smart Live Captions");IntPtr hwnd=new(window.Current.NativeWindowHandle);
-                Invoke(Find(pid,"Hide overlay",ControlType.Button));Thread.Sleep(200);Check(!session.Process.HasExited&&!overlay.HasExited,"Hide keeps the overlay and backend running");
-                int[] owned=OwnedPids(session);PostMessage(hwnd,0x0010,IntPtr.Zero,IntPtr.Zero); // actual WPF Closing -> private intent -> backend shutdown
-                Check(session.Process.WaitForExit(20000)&&session.Process.ExitCode==0,"Normal native window Quit Rayme completes without a console");
+                int[] owned=OwnedPids(session);
+                Invoke(Find(pid,"Hide overlay",ControlType.Button));Until(()=>!IsWindowVisible(hwnd),"Hide removes the caption window from view");
+                Check(!session.Process.HasExited&&!overlay.HasExited&&owned.All(p=>!Gone(p)),"Hide keeps the overlay, backend and inference processes running");
+                InvokeTrayAction(pid,hwnd,"Show overlay");Until(()=>IsWindowVisible(hwnd),"Tray recovery after Hide");
+                Check(!session.Process.HasExited&&!overlay.HasExited,"Tray Show overlay recovers the hidden session");
+                Check(PostMessage(hwnd,0x0010,IntPtr.Zero,IntPtr.Zero),"Native caption-window close request is delivered"); // WM_CLOSE is Hide with tray recovery, not Quit.
+                Until(()=>!IsWindowVisible(hwnd),"Closing the caption window hides it to the tray");
+                Check(!session.Process.HasExited&&!overlay.HasExited&&owned.All(p=>!Gone(p)),"Closing a caption window preserves the session and every owned process");
+                InvokeTrayAction(pid,hwnd,"Show overlay");Until(()=>IsWindowVisible(hwnd),"Tray recovery after native window close");
+                Invoke(Find(pid,"Open Controls",ControlType.Button));Invoke(Find(pid,"Close Controls",ControlType.Button));
+                Check(!session.Process.HasExited&&!overlay.HasExited,"Recovered caption window remains interactive after native close");
+                InvokeTrayAction(pid,hwnd,"Quit Rayme"); // Real menu action -> private exit intent -> supervised backend shutdown.
+                Check(session.Process.WaitForExit(20000)&&session.Process.ExitCode==0,"Explicit tray Quit Rayme completes successfully without a console");
                 Check(owned.All(Gone),"Explicit Quit leaves no owned Node, Whisper or overlay process");
             }
             using(var session=new Session()){
@@ -124,10 +138,21 @@ static class Program{
     static bool Gone(int pid){try{return Process.GetProcessById(pid).HasExited;}catch(ArgumentException){return true;}}
     static HashSet<int> BrowserPids()=>new[]{"chrome","msedge","firefox"}.SelectMany(Process.GetProcessesByName).Select(p=>p.Id).ToHashSet();
     static AutomationElement FindWindow(int pid,string title){AutomationElement? result=null;Until(()=>{result=AutomationElement.RootElement.FindFirst(TreeScope.Children,new AndCondition(new PropertyCondition(AutomationElement.ProcessIdProperty,pid),new PropertyCondition(AutomationElement.NameProperty,title)));return result!=null;},title);return result!;}
-    static AutomationElement Find(int pid,string name,ControlType type,int seconds=30){
+    static void InvokeTrayAction(int pid,IntPtr hwnd,string name){
+        var icon=new TrayIconIdentifier{Size=(uint)Marshal.SizeOf<TrayIconIdentifier>(),Window=hwnd,Id=1};
+        Check(Shell_NotifyIconGetRect(ref icon,out _)==0,"Rayme has registered Shell tray recovery before "+name);
+        // Exercise the production NOTIFYICON_VERSION_4 keyboard notification route.
+        // 0x802A is Rayme's registered callback; LOWORD=NIN_KEYSELECT, HIWORD=icon ID.
+        // The menu and action are real packaged UI, not a direct call to QuitRayme.
+        Check(PostMessage(hwnd,0x802A,IntPtr.Zero,new IntPtr((1<<16)|0x0401)),"Tray keyboard activation is delivered for "+name);
+        Invoke(Find(pid,name,ControlType.Button,alternative:ControlType.MenuItem)); // WPF flyout or native menu fallback.
+    }
+    static AutomationElement Find(int pid,string name,ControlType type,int seconds=30,ControlType? alternative=null){
+        Condition kind=new PropertyCondition(AutomationElement.ControlTypeProperty,type);
+        if(alternative!=null)kind=new OrCondition(kind,new PropertyCondition(AutomationElement.ControlTypeProperty,alternative));
         AutomationElement? found=null;Until(()=>{
             foreach(AutomationElement window in AutomationElement.RootElement.FindAll(TreeScope.Children,new PropertyCondition(AutomationElement.ProcessIdProperty,pid))){
-                found=window.FindFirst(TreeScope.Descendants,new AndCondition(new PropertyCondition(AutomationElement.NameProperty,name),new PropertyCondition(AutomationElement.ControlTypeProperty,type)));if(found!=null)return true;
+                found=window.FindFirst(TreeScope.Descendants,new AndCondition(new PropertyCondition(AutomationElement.NameProperty,name),kind));if(found!=null)return true;
             }return false;
         },name,seconds);return found!;
     }
