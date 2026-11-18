@@ -150,7 +150,7 @@ internal sealed partial class OverlayWindow {
             "Enabling B after A replaces C leaves one visible A/D pair and independent B and C windows");
         foreach(string slot in slots)Apply("caption",slot);
         Render();await AwaitPanels(slots.Select(s=>panels[s]).ToArray());
-        UiCheck(slots.All(s=>panels[s].IsVisible&&panels[s].ActualHeight>0&&panels[s].FinalText=="After the exchange: caption "+s),"Every active native panel displays a new correctly attributed caption after the exchange");
+        UiCheck(slots.All(s=>panels[s].IsVisible&&panels[s].ActualHeight>0&&panels[s].FinalText=="After the exchange: caption "+s+"."),"Every active native panel displays a new correctly attributed caption after the exchange");
         Click(detached["b"].Toolbar.Settings);
         UiCheck(controls?.IsVisible==true&&controls.Owner==detached["b"],"The re-enabled B window can still open its Controls after displaying a caption");
         controls!.Close();
