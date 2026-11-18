@@ -6,6 +6,9 @@ const run = promisify(execFile);
 const DEFAULT_CHANGED = 5; // LoopbackCapture DefaultEndpointChange.ExitCode
 const RETRY_MS = 3000;
 const SWITCH_MS = 150;
+// Healthy helpers emit every 100 ms, padding silence. Allow more than the
+// native two-second buffer before treating a missing PCM stream as stalled.
+const PCM_STALL_MS = 3000;
 async function listDevices(exe) {
   const { stdout } = await run(exe, ['--list'], { windowsHide: true, timeout: 10000, maxBuffer: 256 * 1024 });
   const devices = JSON.parse(stdout);
@@ -13,8 +16,8 @@ async function listDevices(exe) {
   return devices;
 }
 class Capture {
-  constructor(exe, audio, status, discontinuity, spawnChild = spawn, { setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
-    Object.assign(this, { exe, audio, status, discontinuity, spawnChild, setTimer, clearTimer });
+  constructor(exe, audio, status, discontinuity, spawnChild = spawn, { setTimer = setTimeout, clearTimer = clearTimeout, elapsedNow = () => performance.now() } = {}) {
+    Object.assign(this, { exe, audio, status, discontinuity, spawnChild, setTimer, clearTimer, elapsedNow });
     this.generation = 0;
   }
   async select(device = 'default') {
@@ -29,11 +32,52 @@ class Capture {
     const args = typeof device === 'object' ? ['--process', String(device.pid), '--started', device.started] : ['--device', device];
     const child = this.spawnChild(this.exe, args, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }); this.child = child;
     child.stdin?.on('error', () => {}); // A worker can exit before reading EOF.
-    child.stdout.on('data', data => { if (gen === this.generation) this.audio(data); });
+    let lastPcmAt;
+    const recover = async () => {
+      const recovery = this.invalidate();
+      this.discontinuity(device === 'default');
+      this.status('Audio capture stalled. Reconnecting to the selected source…', 'recovering');
+      try {
+        await this.stopWorker();
+        if (recovery === this.generation) this.connect(device, recovery);
+      } catch {
+        if (recovery === this.generation) this.status('Audio capture could not recover. Select the source again.', 'unavailable');
+      }
+    };
+    const checkPcm = () => {
+      if (gen !== this.generation) return;
+      const remaining = PCM_STALL_MS - (this.elapsedNow() - lastPcmAt);
+      if (remaining <= 0) { void recover(); return; }
+      this.watchdog = this.setTimer(checkPcm, remaining);
+      this.watchdog?.unref?.();
+    };
+    const startWatch = () => {
+      if (lastPcmAt !== undefined) return;
+      lastPcmAt = this.elapsedNow();
+      checkPcm();
+    };
+    child.stdout.on('data', data => {
+      if (gen !== this.generation || !data.length) return;
+      const now = this.elapsedNow();
+      // After resume, queued pipe I/O may reach Node before the overdue timer.
+      // Raw PCM has no timestamp to distinguish that backlog from new audio.
+      if (lastPcmAt !== undefined && now - lastPcmAt >= PCM_STALL_MS) { void recover(); return; }
+      startWatch();
+      lastPcmAt = now;
+      this.audio(data);
+    });
     let log = '';
     child.stderr.on('data', data => {
       log += data.toString(); if (log.length > 16384) log = log.slice(-16384);
-      let i; while ((i = log.indexOf('\n')) >= 0) { const line = log.slice(0, i); log = log.slice(i + 1); try { const event = JSON.parse(line); if (gen === this.generation) this.status(event.message || (event.type === 'ready' ? 'Listening to playback audio' : 'Audio unavailable'), event.type === 'ready' ? 'capturing' : 'unavailable'); } catch {} }
+      let i; while ((i = log.indexOf('\n')) >= 0) {
+        const line = log.slice(0, i); log = log.slice(i + 1);
+        try {
+          const event = JSON.parse(line);
+          if (gen !== this.generation) continue;
+          if (event.type === 'ready') startWatch();
+          this.status(event.message || (event.type === 'ready' ? 'Listening to playback audio' : 'Audio unavailable'), event.type === 'ready' ? 'capturing' : 'unavailable');
+        } catch {}
+      }
     });
     const reconnect = (switching = false) => {
       if (gen !== this.generation) return;
@@ -51,9 +95,9 @@ class Capture {
         this.connect(device, retryGen);
       }, switching ? SWITCH_MS : RETRY_MS);
     };
-    child.once('error', () => { if (typeof device === 'object') { if (gen === this.generation) { this.generation++; this.discontinuity(); this.status('Application capture could not start. Refresh and select again.', 'unavailable'); } } else reconnect(); }); child.once('exit', code => {
+    child.once('error', () => { if (typeof device === 'object') { if (gen === this.generation) { this.invalidate(); this.discontinuity(); this.status('Application capture could not start. Refresh and select again.', 'unavailable'); } } else reconnect(); }); child.once('exit', code => {
       if (gen !== this.generation) return;
-      if (typeof device === 'object' || code === 4) { this.generation++; this.discontinuity(); this.status('Source unavailable or activation failed. Refresh and explicitly select again.', 'unavailable'); return; }
+      if (typeof device === 'object' || code === 4) { this.invalidate(); this.discontinuity(); this.status('Source unavailable or activation failed. Refresh and explicitly select again.', 'unavailable'); return; }
       reconnect(device === 'default' && code === DEFAULT_CHANGED);
     });
   }
@@ -61,6 +105,8 @@ class Capture {
     const gen = ++this.generation;
     this.clearTimer(this.retry);
     this.retry = null;
+    this.clearTimer(this.watchdog);
+    this.watchdog = null;
     return gen;
   }
   async stopWorker() {

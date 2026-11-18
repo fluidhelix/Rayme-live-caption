@@ -144,7 +144,15 @@ class SourceManager {
       // PCM sample offset + first-block arrival anchor gives approximate capture order.
       // Raw PCM pipe has no WASAPI QPC header; never claim sample-accurate cross-app timing.
       entry.anchor = null;
-      segmenter.on('segment', job => {if(currentSegment())this.scheduler.add(origin, { ...job, capturedAt: entry.anchor + job.captureOffsetMs, audioEndAt: entry.anchor+job.captureOffsetMs+job.pcm.length/32 });});
+      let blockAnchor;
+      segmenter.on('segment', job => {
+        if (!currentSegment()) return;
+        // Segment events fire synchronously within push(). Backdate to the
+        // end of this segment within the received block, not a stream clock
+        // that has assumed gapless delivery since the first read.
+        this.scheduler.add(origin, { ...job, capturedAt: entry.anchor + job.captureOffsetMs,
+          audioEndAt: blockAnchor + job.captureOffsetMs + job.pcm.length / 32 });
+      });
       segmenter.on('level', level=>{if(currentSegment()){const rms=Math.round(level.rms);this.publish({type:'audio-level',source:origin,rms,dbfs:Math.round(20*Math.log10(Math.max(1,rms)/32768)),low:rms<this.threshold});}});
       // Insufficient voiced duration disqualifies a final, not recognition that
       // was already shown. Retire it as DRAFT; never synthesize text or accept
@@ -152,7 +160,13 @@ class SourceManager {
       // retirements elsewhere retain their default retain:false behavior.
       segmenter.on('retire', job => {if(currentSegment()){this.scheduler.retire(origin,job.id,job.reason,true,undefined,true);this.status(origin,'waiting',job.reason+' Any displayed recognition is retained as an unfinished draft. Listening for speech.');}});
       segmenter.on('activity', event=>{if(currentSegment()&&!event.rejected)this.status(origin,event.active?'capturing':'waiting',event.active?'Capture active — speech detected.':'Capture active — listening for speech.');});
-      entry.push = pcm => { if(!currentSegment())return;if (entry.anchor === null) entry.anchor = this.now() - pcm.length / 32; segmenter.partialMs=this.scheduler.partialInterval(); segmenter.push(pcm); };
+      entry.push = pcm => {
+        if (!currentSegment()) return;
+        blockAnchor = this.now() - segmenter.elapsedMs - (segmenter.tail.length + pcm.length) / 32;
+        if (entry.anchor === null) entry.anchor = blockAnchor;
+        segmenter.partialMs = this.scheduler.partialInterval();
+        segmenter.push(pcm);
+      };
       this.scheduler.attach(entry.source); this.publish({ type: 'reset', source: entry.source });
     };
     entry.capture = this.createCapture(pcm => { if (current()) entry.push?.(pcm); },
