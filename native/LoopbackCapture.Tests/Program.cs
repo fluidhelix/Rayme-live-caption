@@ -1,4 +1,5 @@
 using NAudio.Wave;
+using NAudio.CoreAudioApi;
 // Synthetic tone only: verifies managed WDL conversion without an endpoint.
 foreach (var format in new[] { WaveFormat.CreateIeeeFloatWaveFormat(48000, 2), new WaveFormat(44100, 16, 2), new WaveFormat(48000, 24, 2), new WaveFormat(16000, 16, 1), new WaveFormatExtensible(48000, 32, 2) })
 {
@@ -52,4 +53,36 @@ var buffered = new BufferedWaveProvider(new WaveFormat(16000,16,1), TimeSpan.Fro
 try { buffered.AddSamples(new byte[64002]); throw new Exception("Overflow not bounded"); } catch (InvalidOperationException) { }
 if (buffered.BufferedBytes > 64000) throw new Exception("Unbounded native buffer");
 Console.WriteLine("PASS native buffer limit");
+
+if (DefaultEndpointChange.ForSelection("pinned-id") != null || DefaultEndpointChange.ForSelection(null) != null)
+    throw new Exception("Pinned or process capture installed a default endpoint watcher");
+var change = DefaultEndpointChange.ForSelection("default")!;
+change.Observe(DataFlow.Render, Role.Multimedia, "speakers");
+change.Bind("speakers");
+change.Observe(DataFlow.Render, Role.Console, "other");
+change.Observe(DataFlow.Render, Role.Communications, "other");
+change.Observe(DataFlow.Capture, Role.Multimedia, "other");
+change.Observe(DataFlow.Render, Role.Multimedia, "speakers");
+if (change.Changed) throw new Exception("An unrelated or same-device notification interrupted capture");
+change.Observe(DataFlow.Render, Role.Multimedia, "headset");
+change.Observe(DataFlow.Render, Role.Multimedia, "speakers");
+if (!change.Changed) throw new Exception("Rapid changes must not undo the first stream boundary");
+
+var duringLookup = DefaultEndpointChange.ForSelection("default")!;
+duringLookup.Observe(DataFlow.Render, Role.Multimedia, "headset");
+duringLookup.Bind("speakers");
+if (!duringLookup.Changed) throw new Exception("A notification during default endpoint lookup was lost");
+var removed = DefaultEndpointChange.ForSelection("default")!;
+removed.Bind("speakers");
+removed.Observe(DataFlow.Render, Role.Multimedia, null);
+if (!removed.Changed) throw new Exception("Losing the default must interrupt the old stream");
+Console.WriteLine("PASS default render/multimedia notification filtering, lookup race and rapid/unavailable transitions");
+
+if (OperatingSystem.IsWindows()) {
+    using var enumerator = new MMDeviceEnumerator();
+    using var notifications = enumerator.CreateNotificationClient(useSynchronizationContext: false);
+    notifications.DefaultDeviceChanged += (_, e) => change.Observe(e.Flow, e.Role, e.DeviceId);
+    notifications.Dispose();
+    Console.WriteLine("PASS Windows Core Audio notification registration and disposal");
+}
 sealed class DisposableProbe : IDisposable { public bool Disposed; public void Dispose() => Disposed = true; }

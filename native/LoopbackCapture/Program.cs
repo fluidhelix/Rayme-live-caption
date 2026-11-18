@@ -39,6 +39,18 @@ public static class AudioConversion
 public static class Program
 {
     static void Status(string type, string message) => Console.Error.WriteLine(JsonSerializer.Serialize(new { type, message }));
+    static void RequestStop(CancellationTokenSource shutdown)
+    {
+        lock (shutdown)
+        {
+            try { shutdown.Cancel(); } catch (ObjectDisposedException) { }
+        }
+    }
+    static async Task WaitForParent(CancellationTokenSource shutdown)
+    {
+        try { await Console.In.ReadLineAsync(); } catch (IOException) { }
+        RequestStop(shutdown);
+    }
     public static async Task<int> Main(string[] args)
     {
         try
@@ -61,32 +73,63 @@ public static class Program
             if (!processMode && (args.Length != 2 || args[0] != "--device")) throw new ArgumentException("Use --list, --apps, --device <endpoint>, or --process <pid> --started <ticks>.");
             int pid = processMode ? int.Parse(args[1]) : 0;
             string started = processMode ? args[3] : "";
-            if (processMode && !OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000)) { Status("unsupported", "Application capture requires Windows 11; whole-device capture remains available."); return 4; }
-            if (processMode && !Discovery.Matches(pid, started)) { Status("terminated", "Selected process exited, was replaced or cannot be inspected. Refresh and select again."); return 3; }
-            using var endpoint = processMode ? null : args[1] == "default" ? enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia) : enumerator.GetDevice(args[1]);
+            var shutdown = new CancellationTokenSource();
+            ConsoleCancelEventHandler cancelKey = (_, e) => { e.Cancel = true; RequestStop(shutdown); };
+            Console.CancelKeyPress += cancelKey;
+            // Parent closes stdin or writes a line on shutdown. No named global resources.
+            _ = Task.Run(() => WaitForParent(shutdown));
+            try { return await Record(enumerator, processMode ? null : args[1], pid, started, shutdown.Token); }
+            finally
+            {
+                Console.CancelKeyPress -= cancelKey;
+                lock (shutdown) shutdown.Dispose();
+            }
+        }
+        catch (Exception ex) { Status("error", $"Capture or activation failed: {ex.Message}"); return args.Length > 0 && args[0] == "--device" ? 2 : 4; }
+    }
+
+    static async Task<int> Record(MMDeviceEnumerator enumerator, string? selection, int pid, string started, CancellationToken shutdown)
+    {
+        bool processMode = selection == null;
+        var watch = DefaultEndpointChange.ForSelection(selection);
+        // Subscribe before resolving the endpoint so switching during lookup or
+        // activation cannot strand us on a still-healthy former default.
+        using var notifications = watch == null ? null : enumerator.CreateNotificationClient(useSynchronizationContext: false);
+        if (notifications != null) notifications.DefaultDeviceChanged += (_, e) => watch!.Observe(e.Flow, e.Role, e.DeviceId);
+        using var cancel = CancellationTokenSource.CreateLinkedTokenSource(shutdown);
+        try
+        {
+            if (shutdown.IsCancellationRequested) return 0;
+            using var endpoint = processMode ? null : watch != null ? enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia) : enumerator.GetDevice(selection!);
+            if (watch != null) watch.Bind(endpoint!.ID);
+            if (watch?.Changed == true) return DefaultEndpointChange.ExitCode;
             if (endpoint != null && endpoint.DataFlow != DataFlow.Render) throw new ArgumentException("Only playback endpoints can be captured.");
             var builder = new WasapiRecorderBuilder();
-            if (processMode) builder.WithProcessLoopback((uint)pid, ProcessLoopbackMode.IncludeTargetProcessTree);
+            if (processMode)
+            {
+                if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000)) { Status("unsupported", "Application capture requires Windows 11; whole-device capture remains available."); return 4; }
+                if (!Discovery.Matches(pid, started)) { Status("terminated", "Selected process exited, was replaced or cannot be inspected. Refresh and select again."); return 3; }
+                builder.WithProcessLoopback((uint)pid, ProcessLoopbackMode.IncludeTargetProcessTree);
+            }
             else builder.WithDevice(endpoint!).WithLoopbackCapture();
             // Process activation must be asynchronous. Never substitute endpoint audio on failure.
             using var capture = processMode
                 ? await CapturePolicy.ActivateChecked(pid, started, Discovery.Identity, () => builder.BuildAsync().WaitAsync(TimeSpan.FromSeconds(15)))
                 : await builder.BuildAsync();
+            if (shutdown.IsCancellationRequested) return 0;
+            if (watch?.Changed == true) return DefaultEndpointChange.ExitCode;
             if (processMode && !Discovery.Matches(pid, started)) { Status("terminated", "Process changed during activation."); return 3; }
             var input = new BufferedWaveProvider(capture.WaveFormat, TimeSpan.FromSeconds(2)) { ReadFully = true, DiscardOnBufferOverflow = false };
             var converter = AudioConversion.Create(input);
-            using var cancel = new CancellationTokenSource();
             var gate = new object(); Exception? failure = null;
             capture.DataAvailable += (buffer, flags, devicePosition, qpcPosition) => {
                 lock (gate) {
+                    if (watch?.Changed == true || cancel.IsCancellationRequested) return;
                     try { input.AddSamples(buffer); }
                     catch (Exception ex) { failure = ex; cancel.Cancel(); }
                 }
             };
             capture.RecordingStopped += (_, e) => { failure = e.Exception ?? new IOException("Playback device stopped or was removed."); cancel.Cancel(); };
-            Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancel.Cancel(); };
-            // Parent closes stdin or writes a line on shutdown. No named global resources.
-            _ = Task.Run(async () => { await Console.In.ReadLineAsync(); cancel.Cancel(); });
             using var output = Console.OpenStandardOutput();
             byte[] pcm = new byte[3200];
             capture.StartRecording(); Status("ready", "Capturing selected source (16 kHz mono PCM).");
@@ -95,17 +138,20 @@ public static class Program
                 using var clock = new PeriodicTimer(TimeSpan.FromMilliseconds(100));
                 while (await clock.WaitForNextTickAsync(cancel.Token))
                 {
+                    if (watch?.Changed == true) break;
                     if (processMode && !Discovery.Matches(pid, started)) { Status("terminated", "Selected process ended. Refresh applications and select the new identity."); return 3; }
                     int count;
                     lock (gate) { count = converter.Read(pcm); }
-                    if (count > 0) { await output.WriteAsync(pcm.AsMemory(0, count), cancel.Token); await output.FlushAsync(cancel.Token); }
+                    if (count > 0 && watch?.Changed != true) { await output.WriteAsync(pcm.AsMemory(0, count), cancel.Token); await output.FlushAsync(cancel.Token); }
                 }
             }
             catch (OperationCanceledException) { }
             finally { capture.StopRecording(); }
+            if (shutdown.IsCancellationRequested) return 0;
+            if (watch?.Changed == true) return DefaultEndpointChange.ExitCode;
             if (failure != null) { Status("disconnected", "Audio endpoint stopped or capture buffer overflowed. Reconnecting."); return 2; }
             return 0;
         }
-        catch (Exception ex) { Status("error", $"Capture or activation failed: {ex.Message}"); return args.Length > 0 && args[0] == "--device" ? 2 : 4; }
+        catch (Exception) when (shutdown.IsCancellationRequested) { return 0; }
     }
 }

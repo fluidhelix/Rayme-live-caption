@@ -25,6 +25,12 @@ class SourceScheduler {
     if(state.displayed&&(state.displayed.id<id||state.displayed.id===id&&(terminal||state.displayed.revision<=rev))){this.clearTimer(state.timer);state.displayed=null;state.timer=null;}
     this.publish({type:'segment-retired',source:state.source,id,revision:rev,terminal,reason,retain});this.watchQueue(state);
   }
+  discardOpenPartial(source) {
+    const state = this.sources.get(source.id);
+    if (state?.source.generation === source.generation && state.displayed) {
+      this.retire(source, state.displayed.id, 'Default playback capture ended.');
+    }
+  }
   add(source,job){
     const state=this.sources.get(source.id);
     if(this.closed||!state||state.source.generation!==source.generation||!Number.isSafeInteger(job.id)||job.id<=0)return;
@@ -127,7 +133,10 @@ class SourceManager {
   async start(entry) {
     const epoch=Symbol();entry.captureEpoch=epoch;
     const current=()=>!this.closed&&!this.paused&&this.slots.get(entry.source.id)===entry&&entry.captureEpoch===epoch;
-    const reset = () => {
+    const reset = (discardPartial = false) => {
+      // Retire before advancing the generation, which normally preserves an
+      // open partial as an unfinished caption for same-identity resets.
+      if (discardPartial) this.scheduler.discardOpenPartial(entry.source);
       this.scheduler.remove(entry.source.id);
       entry.source = Object.freeze({ ...entry.source, generation: ++this.generation });
       const origin=entry.source,segmenter=new Segmenter({ threshold: this.threshold });entry.segmenter=segmenter;
@@ -148,7 +157,7 @@ class SourceManager {
     };
     entry.capture = this.createCapture(pcm => { if (current()) entry.push?.(pcm); },
       (message, state = 'recovering') => { if (current()) this.status(entry.source, state==='capturing'?'waiting':state, state==='capturing'?message+' — waiting for speech.':message,state==='capturing'); },
-      () => { if (current()) reset(); });
+      discardPartial => { if (current()) reset(discardPartial); });
     reset();
     await entry.capture.select(entry.descriptor.kind === 'device' ? entry.descriptor.endpoint : entry.descriptor);
   }
