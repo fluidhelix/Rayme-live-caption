@@ -13,7 +13,7 @@ GET STARTED
    be resumed. The model is verified against its pinned upstream checksum. Keep your own
    models outside the program directory; downloads use your local app data.
 5. Once the model is ready, Windows default playback capture starts automatically.
-   Use Controls > Audio sources to switch to Application A/B or pause capture.
+   Use Controls > Audio sources to enable up to five applications or pause capture.
    Choosing applications keeps fallback off for that session; every new launch
    starts with Windows default playback after model readiness.
 6. Drag blank caption surfaces or headers while unlocked; dragging text selects it.
@@ -24,16 +24,14 @@ GET STARTED
    panel. Quit Rayme stops speech recognition, capture and all owned processes.
 
 CAPTION READING
-One enabled application fills the window. With both enabled, A stays above B
-in separate continuous transcript panels. Detach is available only with both
-applications enabled; choose it explicitly for two independent caption windows.
-Reattach from either window or the tray. Disabling a source restores one window.
-Whole-device playback uses one panel. Each scrolls independently; captions follow
-new speech only while you are near the bottom. Scroll back down to resume follow.
+One application fills its window. Paired applications have upper and lower
+transcript panels. Use the contextual Attach, Detach or Choose pairing controls
+to change window groups. Separate windows can be moved and resized independently.
+Whole-device playback uses one panel. Deliberately scrolling up pauses following
+in that transcript; intentionally returning to the bottom resumes it.
 Finalized captions remain during silence and pauses. Each source retains up to
 200 segments, with character and byte budgets for long captions. Underlined DRAFT
-text is unfinished recognition kept for reading, not a verified final. Scroll
-up to reread; returning near the bottom resumes follow. Resizing changes wrapping
+text is unfinished recognition kept for reading. Resizing changes wrapping
 and visible lines, never the retention budget. Clear history is shared by all clients.
 Clear removes displayed history; it does not stop recognition already running.
 A fresh recognition result can therefore appear after Clear.
@@ -73,9 +71,12 @@ show a hidden overlay, disable click-through, unlock or restore it to the primar
 monitor. Click-through starts off on every launch. If a component crashes, the
 launcher stops the owned session and offers Retry or Cancel. Retry starts one
 fresh session; it does not open Chrome or another browser. Cancel quits.
-Rayme never changes playback settings or disables exclusive mode. An unavailable
-or busy output must be changed in Controls; consult Windows device settings if
-another application has reserved it. The default is Windows' multimedia output.
+In Windows default playback mode, Rayme follows the current multimedia output
+even if the previous output is still connected. Explicitly selected devices stay
+pinned. Rayme tries to reconnect after interruptions or a stalled capture stream.
+Finalized captions remain visible. If recovery fails, select an available
+output in Controls or check Windows device settings. Rayme never changes
+playback settings or disables exclusive mode.
 
 REQUIREMENTS AND LIMITS
 The Release notes state the exact ZIP and extracted sizes for each build. Bundled

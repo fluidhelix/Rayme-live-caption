@@ -9,6 +9,10 @@ on:
         description: Run real CUDA inference on a configured NVIDIA self-hosted runner
         type: boolean
         default: false
+      reuse_verified_whisper:
+        description: Require an existing exact runtime for every Whisper test (validation branch only)
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -19,6 +23,10 @@ jobs:
       key: ${{ steps.identity.outputs.key }}
       tools: ${{ steps.identity.outputs.tools }}
     steps:
+      - name: Restrict reuse-only validation to the consolidated RC branch
+        if: inputs.reuse_verified_whisper && github.ref != 'refs/heads/validation/consolidated-rc'
+        shell: pwsh
+        run: throw 'Reuse-only qualification is reserved for validation/consolidated-rc'
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -93,8 +101,12 @@ jobs:
           path: artifacts/whisper-runtime
           github-token: ${{ github.token }}
           run-id: ${{ steps.existing.outputs.run_id }}
+      - name: Stop reuse-only validation if the verified bundle is unavailable
+        if: inputs.reuse_verified_whisper && steps.native-cache.outputs.cache-hit != 'true' && steps.existing.outputs.run_id == ''
+        shell: pwsh
+        run: throw 'The exact verified CPU/CUDA bundle is unavailable. Native builds are forbidden in reuse-only validation.'
       - name: Compile pinned CPU/CUDA only when no exact verified bundle exists
-        if: steps.native-cache.outputs.cache-hit != 'true' && steps.existing.outputs.run_id == ''
+        if: inputs.reuse_verified_whisper != true && steps.native-cache.outputs.cache-hit != 'true' && steps.existing.outputs.run_id == ''
         shell: pwsh
         run: |
           ./distribution/runtime-inputs.ps1 -OutputFile artifacts/installed-native-inputs.json
@@ -409,6 +421,10 @@ jobs:
           path: artifacts/audio-diagnostics/
           if-no-files-found: error
   speech-integration:
+    needs: [runtime-inputs, whisper-runtime]
+    if: >-
+      !cancelled() && (inputs.reuse_verified_whisper != true ||
+      (needs.runtime-inputs.result == 'success' && needs.whisper-runtime.result == 'success'))
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
@@ -421,11 +437,23 @@ jobs:
       - name: PowerShell to CMake argument regression
         shell: pwsh
         run: ./test/audio/cmake-arguments.test.ps1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        if: inputs.reuse_verified_whisper
+        with:
+          name: rayme-${{ needs.runtime-inputs.outputs.key }}
+          path: artifacts/speech-whisper-runtime
       - name: Prepare pinned CPU Whisper and CI-only tiny.en (required)
         shell: pwsh
         run: |
           try {
-            ./test/audio/prepare-whisper.ps1
+            if ('${{ inputs.reuse_verified_whisper }}' -eq 'true') {
+              $bundle = 'artifacts/speech-whisper-runtime'
+              node distribution/runtime-bundle.js verify $bundle '${{ needs.runtime-inputs.outputs.key }}'
+              if ($LASTEXITCODE -ne 0) { throw 'Speech runtime hash/identity verification failed' }
+              ./test/audio/prepare-whisper.ps1 -CpuServer "$bundle/cpu/whisper-server.exe"
+            } else {
+              ./test/audio/prepare-whisper.ps1
+            }
           } catch {
             # Keep download credentials and signed redirect URLs out of annotations.
             $message = $_.Exception.Message -replace 'https?://\S+', '[download URL]'

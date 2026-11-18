@@ -1,4 +1,4 @@
-param([string]$OutputDirectory = "artifacts/ci-whisper", [switch]$FixtureOnly)
+param([string]$OutputDirectory = "artifacts/ci-whisper", [switch]$FixtureOnly, [string]$CpuServer)
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path "$PSScriptRoot/../..").Path
 $assets = Get-Content "$PSScriptRoot/assets.json" -Raw | ConvertFrom-Json
@@ -11,6 +11,14 @@ function Fetch-Verified($url, $file, $algorithm, $expected) {
 Fetch-Verified $assets.fixtureUrl "$root/jfk.wav" SHA256 $assets.fixtureSha256
 if ($FixtureOnly) { return }
 Fetch-Verified $assets.modelUrl "$root/ggml-tiny.en.bin" SHA1 $assets.modelSha1
+if ($CpuServer) {
+    # The workflow verifies the complete runtime bundle before supplying this executable.
+    $serverPath = (Resolve-Path -LiteralPath $CpuServer).ProviderPath
+    if (!(Test-Path -LiteralPath $serverPath -PathType Leaf)) { throw 'Verified Windows CPU whisper-server is missing' }
+    @{ server = $serverPath; model = "$root/ggml-tiny.en.bin"; fixture = "$root/jfk.wav" } |
+        ConvertTo-Json | Set-Content "$root/runtime.json"
+    return
+}
 Fetch-Verified $assets.sourceUrl "$root/whisper-source.tar.gz" SHA256 $assets.sourceSha256
 $source = "$root/whisper.cpp-$($assets.whisperCommit)"
 if (!(Test-Path $source)) { tar -xzf "$root/whisper-source.tar.gz" -C $root; if ($LASTEXITCODE -ne 0) { throw 'Source extraction failed' } }

@@ -1,7 +1,7 @@
 # Rayme Smart Live Captions 1.0.0 — prerelease
 
 A portable Windows 11 x64 application for locally generated playback captions,
-with a floating native WPF display, modern Controls, two application sources,
+with a floating native WPF display, modern Controls, up to five application sources,
 whole-device fallback, source attribution and multi-monitor recovery.
 
 Download **Rayme-Smart-Live-Captions-v1.0.0-win-x64.zip** and **SHA256SUMS.txt**
@@ -18,7 +18,19 @@ capture helpers and overlay, without opening a browser. Unexpected failures
 stop the session and offer controlled Retry or Quit. Hide and Close Controls
 remain separate operations.
 
-## Phase 5B usability changes
+## What changed since rc.59
+
+- Caption groups stay distinct when a disabled source is re-enabled after an
+  application exchange. Each enabled application appears in one window group.
+  Saved appearance and window placement remain compatible.
+- Windows default playback follows the current multimedia output when Windows
+  changes it, even while the old device stays connected. An explicitly selected
+  playback device stays pinned; application capture ignores default changes.
+- Fresh audio stays eligible for captions after long interruptions. Rayme
+  reconnects when the PCM stream stalls and drops interrupted audio and obsolete
+  drafts before resuming. Finalized captions remain available to reread.
+
+## Captions and speech recognition
 
 Windows default playback now starts automatically once the configured model is
 ready. Switching to applications keeps fallback off for the rest of that session.
@@ -34,7 +46,7 @@ latency, especially on CPU with Large-v3-Turbo. Existing freshness and attributi
 guards remain. Privacy-preserving signal feedback can help identify low playback
 volume without recording audio or changing device settings.
 
-## Approved overlay update
+## Caption windows
 
 Black caption surfaces retain adjustable background opacity and the live 16–60
 text-size control. Only application-name titles use source colors; original and
@@ -42,16 +54,15 @@ custom saved colors are preserved. A native HEX/RGB/hue picker offers Restore
 default. Controls, setup, error prompts, text menus and both tray menu paths use
 neutral charcoal rather than blue/navy surfaces. The Rayme icon is unchanged.
 
-One application fills the window; two use the combined upper/lower layout.
-Detaching is explicit and available only with both application sources enabled.
-The two views have independent placement/size/lock and reuse the existing shared
-caption stream. Reattach from either window or the tray; source removal returns
-to a single window. Background dragging respects text selection and controls.
+One application fills its window. Two paired applications share upper and lower
+transcripts. Use the contextual Attach, Detach or Choose pairing controls where
+available. Separate windows can be moved, resized and locked independently.
+Drag blank surfaces to move an unlocked window; dragging text selects it.
 
-Continuous native segment inlines preserve reading anchors through corrections,
-with fixed status/LIVE geometry and reserved scrollbar width. Silence/status do
-not request bottom scrolling. Final correction remains accurate. Synthetic native
-geometry tests are distinct from physical-machine long-session acceptance.
+Each transcript keeps its reading position during deliberate upward scrolling,
+silence and recognition corrections. Intentionally returning to the bottom
+resumes follow. Retained DRAFT text is unfinished recognition. Finalized captions
+stay until cleared or pruned by the per-source history limits.
 
 The launcher now bundles the same pinned .NET Windows Desktop framework already
 used by the overlay so its own recovery prompts can use the shared charcoal
