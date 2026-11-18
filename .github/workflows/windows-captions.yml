@@ -423,7 +423,18 @@ jobs:
         run: ./test/audio/cmake-arguments.test.ps1
       - name: Prepare pinned CPU Whisper and CI-only tiny.en (required)
         shell: pwsh
-        run: ./test/audio/prepare-whisper.ps1
+        run: |
+          try {
+            ./test/audio/prepare-whisper.ps1
+          } catch {
+            # Keep download credentials and signed redirect URLs out of annotations.
+            $message = $_.Exception.Message -replace 'https?://\S+', '[download URL]'
+            $message = $message.Substring(0, [Math]::Min(2000, $message.Length))
+            $script = [IO.Path]::GetFileName([string]$_.InvocationInfo.ScriptName)
+            $failure = ('{0}:{1}: {2}' -f $script, $_.InvocationInfo.ScriptLineNumber, $message).Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+            Write-Output "::error title=Pinned speech preparation::$failure"
+            throw
+          }
       - name: Real speech end-to-end through production modules (no WASAPI needed)
         run: node test/audio/speech-e2e.js artifacts/ci-whisper/runtime.json artifacts/audio-diagnostics/speech.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
