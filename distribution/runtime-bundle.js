@@ -3,7 +3,7 @@ const fs=require('node:fs');
 const path=require('node:path');
 const crypto=require('node:crypto');
 const assert=require('node:assert/strict');
-const inputFiles=['distribution/build-whisper.ps1','distribution/whisper-common.ps1','distribution/runtime-inputs.ps1','distribution/runtime-bundle.js','distribution/whisper-utf8.manifest','distribution/legal/NVIDIA-cudart.txt','distribution/legal/NVIDIA-cublas.txt'];
+const inputFiles=['distribution/build-whisper.ps1','distribution/whisper-common.ps1','distribution/runtime-inputs.ps1','distribution/runtime-bundle.js','distribution/whisper-session-auth.patch','distribution/whisper-utf8.manifest','distribution/legal/NVIDIA-cudart.txt','distribution/legal/NVIDIA-cublas.txt'];
 function canonical(value){return JSON.stringify(Array.isArray(value)?value.map(v=>JSON.parse(canonical(v))):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(k=>[k,JSON.parse(canonical(value[k]))])):value);}
 const digest=text=>crypto.createHash('sha256').update(text).digest('hex');
 async function hash(file){const h=crypto.createHash('sha256');for await(const chunk of fs.createReadStream(file))h.update(chunk);return h.digest('hex');}

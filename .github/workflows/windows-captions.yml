@@ -9,6 +9,10 @@ on:
         description: Run real CUDA inference on a configured NVIDIA self-hosted runner
         type: boolean
         default: false
+      validate_native_candidate:
+        description: Build the authentication candidate with the existing locked toolchain
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -24,11 +28,19 @@ jobs:
         with:
           node-version: '22.23.5'
       - id: identity
-        name: Verify native inputs against the pinned, previously validated runtime identity
+        name: Resolve verified native inputs or the branch-only candidate
         shell: pwsh
         run: |
-          node distribution/runtime-reference.js . artifacts/native-inputs.json
-          if ($LASTEXITCODE -ne 0) { throw 'Verified native runtime reference no longer matches native build inputs' }
+          if ('${{ inputs.validate_native_candidate }}' -eq 'true') {
+            if ($env:GITHUB_EVENT_NAME -ne 'workflow_dispatch' -or $env:GITHUB_REF -cne 'refs/heads/fix/whisper-session-auth') { throw 'Native candidate validation is restricted to its dedicated branch' }
+            New-Item -ItemType Directory -Force artifacts | Out-Null
+            $reference = Get-Content distribution/verified-runtime.json -Raw | ConvertFrom-Json
+            $reference.toolchain | ConvertTo-Json -Compress | Set-Content artifacts/locked-tools.json -Encoding utf8NoBOM
+            node distribution/runtime-bundle.js identity . artifacts/locked-tools.json artifacts/native-inputs.json
+          } else {
+            node distribution/runtime-reference.js . artifacts/native-inputs.json
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'Native runtime identity verification failed' }
           $key = (Get-Content artifacts/native-inputs.json -Raw | ConvertFrom-Json).key
           "key=$key" | Out-File $env:GITHUB_OUTPUT -Encoding utf8 -Append
           $tools = (Get-Content artifacts/native-inputs.json -Raw | ConvertFrom-Json).inputs.toolchain | ConvertTo-Json -Compress
@@ -59,7 +71,11 @@ jobs:
           EXPECTED_RUNTIME_TOOLS: ${{ needs.runtime-inputs.outputs.tools }}
         run: |
           try {
-            node distribution/runtime-reference.js . artifacts/native-inputs.json
+            if ('${{ inputs.validate_native_candidate }}' -eq 'true') {
+              ./distribution/runtime-inputs.ps1 -OutputFile artifacts/native-inputs.json
+            } else {
+              node distribution/runtime-reference.js . artifacts/native-inputs.json
+            }
             if ($LASTEXITCODE -ne 0) { throw 'Native runtime source identity no longer matches the verified reference' }
             $identity = Get-Content artifacts/native-inputs.json -Raw | ConvertFrom-Json
             if ($identity.key -cne '${{ needs.runtime-inputs.outputs.key }}') {
@@ -72,12 +88,13 @@ jobs:
             throw
           }
       - uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
+        if: inputs.validate_native_candidate != true
         id: native-cache
         with:
           path: artifacts/whisper-runtime
           key: ${{ needs.runtime-inputs.outputs.key }}
       - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b
-        if: steps.native-cache.outputs.cache-hit != 'true'
+        if: inputs.validate_native_candidate != true && steps.native-cache.outputs.cache-hit != 'true'
         id: existing
         env:
           RUNTIME_KEY: ${{ needs.runtime-inputs.outputs.key }}
@@ -122,7 +139,7 @@ jobs:
           overwrite: true
           if-no-files-found: error
       - uses: actions/cache/save@5a3ec84eff668545956fd18022155c47e93e2684
-        if: steps.native-cache.outputs.cache-hit != 'true'
+        if: inputs.validate_native_candidate != true && steps.native-cache.outputs.cache-hit != 'true'
         with:
           path: artifacts/whisper-runtime
           key: ${{ needs.runtime-inputs.outputs.key }}

@@ -38,6 +38,18 @@ async function speechE2E(runtime, output) {
       {testOnlyStartupDiagnostics:diagnostics=>{startupDiagnostics=diagnostics;}});
     const startup=[];await whisper.start(message=>startup.push(message));
     rows.push({check:'Actual CPU whisper-server health',outcome:'PASS',evidence:'Real child server returned /health status ok; CI-only tiny.en model.'});
+    for(const route of ['/inference','/load']) {
+      for(const headers of [{},{Authorization:'Bearer '+'0'.repeat(64)}]) {
+        const body=new FormData();
+        // These intentionally invalid requests must be rejected at the native
+        // authentication boundary, before either handler can interpret them.
+        body.set(route==='/load'?'model':'file',new Blob(['invalid input']),'fixture');
+        const response=await fetch(whisper.url+route,{method:'POST',headers,body,redirect:'error',signal:AbortSignal.timeout(5000)});
+        await response.body?.cancel();
+        assert.equal(response.status,401,`Native ${route} must reject missing and incorrect credentials`);
+      }
+    }
+    rows.push({check:'Native session authentication',outcome:'PASS',evidence:'Direct loopback HTTP clients received 401 for inference and model management with missing or incorrect credentials.'});
     ui=await createUI({port:0});const received=[];
     ws=new WebSocket(ui.url.replace('http:','ws:'),{origin:new URL(ui.url).origin});
     ws.on('message',m=>received.push(JSON.parse(m)));

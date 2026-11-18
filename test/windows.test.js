@@ -36,6 +36,31 @@ test('HTTP readiness waits for health and detects startup failure/timeout',async
  let ready=false;const s=await serve((req,res)=>{res.writeHead(ready?200:503,{'Content-Type':'application/json'});res.end(JSON.stringify({status:ready?'ok':'loading'}));});
  try {await assert.rejects(waitReady(s.url,()=>false),/exited/);await assert.rejects(waitReady(s.url,()=>true,{timeout:30,interval:5}),/timed out/);ready=true;await waitReady(s.url,()=>true,{timeout:100});}finally{await s.close();}
 });
+test('Whisper readiness does not query a listener before the owned child binds',async()=>{
+ let requests=0;const s=await serve((_req,res)=>{requests++;res.end('{"status":"ok"}');});
+ try{
+  await assert.rejects(waitReady(s.url,()=>true,{bound:()=>false,timeout:25,interval:5}),/timed out/);
+  assert.equal(requests,0);
+  await waitReady(s.url,()=>true,{bound:()=>true,timeout:100});assert.equal(requests,1);
+ }finally{await s.close();}
+});
+test('Whisper sends a private credential per worker and never forwards inference through redirects',async()=>{
+ let requests=0,initial;
+ const redirect=await serve((_req,res)=>{requests++;res.end('{"text":"redirected"}');});
+ const s=await serve(async(req,res)=>{
+  for await(const _ of req){};
+  assert.ok(/^Bearer [a-f0-9]{64}$/.test(req.headers.authorization||''));
+  if(!initial){initial=req.headers.authorization;res.end('{"text":"first worker"}');return;}
+  assert.ok(initial!==req.headers.authorization,'workers must not share a credential');
+  res.writeHead(307,{Location:redirect.url});res.end();
+ });
+ const first=new Whisper({}),second=new Whisper({});first.url=second.url=s.url;
+ try{
+  assert.equal(await first.infer(tone(10)),'first worker');
+  await assert.rejects(second.infer(tone(10)));
+  assert.equal(requests,0);
+ }finally{await first.close();await second.close();await s.close();await redirect.close();}
+});
 test('Whisper sends local WAV, preserves annotations, rejects HTTP errors and non-JSON', async()=>{
  let mode='ok';const s=await serve(async(req,res)=>{let body=Buffer.alloc(0);for await(const c of req) body=Buffer.concat([body,c]);assert.ok(body.includes(Buffer.from('RIFF')));if(mode==='error'){res.writeHead(500);res.end('error text');}else if(mode==='html')res.end('<html>error</html>');else res.end(JSON.stringify({text:'[laughter] *coughing* *sighing*'}));});
  const w=new Whisper({});w.url=s.url;

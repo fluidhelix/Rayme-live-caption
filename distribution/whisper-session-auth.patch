@@ -1,0 +1,177 @@
+--- a/examples/server/server.cpp
++++ b/examples/server/server.cpp
+@@ -10,6 +10,7 @@
+ #include <cmath>
+ #include <cstdio>
+ #include <fstream>
++#include <iostream>
+ #include <sstream>
+ #include <string>
+ #include <thread>
+@@ -67,6 +68,7 @@
+     int32_t write_timeout = 600;
+ 
+     bool ffmpeg_converter = false;
++    bool rayme_session_auth = false;
+ };
+ 
+ struct whisper_params {
+@@ -136,6 +138,7 @@
+     fprintf(stderr, "\n");
+     fprintf(stderr, "options:\n");
+     fprintf(stderr, "  -h,        --help                      [default] show this help message and exit\n");
++    fprintf(stderr, "  --rayme-session-auth                 Required: read session credential from owned stdin\n");
+     fprintf(stderr, "  -t N,      --threads N                 [%-7d] number of threads to use during computation\n",    params.n_threads);
+     fprintf(stderr, "  -p N,      --processors N              [%-7d] number of processors to use during computation\n", params.n_processors);
+     fprintf(stderr, "  -ot N,     --offset-t N                [%-7d] time offset in milliseconds\n",                    params.offset_t_ms);
+@@ -207,6 +210,7 @@
+             whisper_print_usage(argc, argv, params, sparams);
+             exit(0);
+         }
++        else if (arg == "--rayme-session-auth")                         { sparams.rayme_session_auth       = true; }
+         else if (arg == "-t"     || arg == "--threads")                   { params.n_threads                 = std::stoi(argv[++i]); }
+         else if (arg == "-p"     || arg == "--processors")                { params.n_processors              = std::stoi(argv[++i]); }
+         else if (arg == "-ot"    || arg == "--offset-t")                  { params.offset_t_ms               = std::stoi(argv[++i]); }
+@@ -651,6 +655,25 @@
+         return 1;
+     }
+ 
++    // The launcher writes a fresh 32-byte random token as hex through its
++    // owned stdin pipe. There is no CLI, environment, or unauthenticated mode.
++    if (!sparams.rayme_session_auth || sparams.hostname != "127.0.0.1") {
++        fprintf(stderr, "error: Rayme requires session authentication and IPv4 loopback\n");
++        return 1;
++    }
++    char token_line[65] = {};
++    if (!std::cin.getline(token_line, sizeof(token_line)) || std::cin.eof() || std::cin.gcount() != 65) {
++        fprintf(stderr, "error: missing or invalid Rayme session credential\n");
++        return 1;
++    }
++    for (const char c : std::string(token_line, 64)) {
++        if ((c < '0' || c > '9') && (c < 'a' || c > 'f')) {
++            fprintf(stderr, "error: missing or invalid Rayme session credential\n");
++            return 1;
++        }
++    }
++    const std::string authorization = "Bearer " + std::string(token_line, 64);
++
+     if (params.language != "auto" && whisper_lang_id(params.language.c_str()) == -1) {
+         fprintf(stderr, "error: unknown language '%s'\n", params.language.c_str());
+         whisper_print_usage(argc, argv, params, sparams);
+@@ -735,9 +758,36 @@
+     state.store(SERVER_STATE_READY);
+ 
+ 
+-    svr->set_default_headers({{"Server", "whisper.cpp"},
+-                             {"Access-Control-Allow-Origin", "*"},
+-                             {"Access-Control-Allow-Headers", "content-type, authorization"}});
++    svr->set_default_headers({{"Server", "whisper.cpp"}});
++    // This hook runs before static routes, multipart parsing, and inference.
++    svr->set_pre_routing_handler([&](const Request &req, Response &res) {
++        if ((req.method == "GET" || req.method == "HEAD") && req.path == sparams.request_path + "/health") {
++            return Server::HandlerResponse::Unhandled;
++        }
++
++        const auto supplied = req.get_header_value("Authorization");
++        unsigned int difference = 0;
++        if (req.get_header_value_count("Authorization") == 1 && supplied.size() == authorization.size()) {
++            for (size_t i = 0; i < authorization.size(); ++i) {
++                difference |= static_cast<unsigned char>(supplied[i] ^ authorization[i]);
++            }
++            if (difference == 0) {
++                // Rayme switches models by launching a new owned worker.
++                if (req.method == "POST" && req.path == sparams.request_path + sparams.inference_path) {
++                    return Server::HandlerResponse::Unhandled;
++                }
++                res.status = 404;
++                res.set_header("Connection", "close");
++                res.set_content("File Not Found", "text/plain");
++                return Server::HandlerResponse::Handled;
++            }
++        }
++        res.status = 401;
++        // The request body was deliberately not consumed. Do not reuse the connection.
++        res.set_header("Connection", "close");
++        res.set_content("Unauthorized", "text/plain");
++        return Server::HandlerResponse::Handled;
++    });
+ 
+     std::string const default_content = R"(
+     <html>
+@@ -1172,49 +1222,6 @@
+                             "application/json");
+         }
+     });
+-    svr->Post(sparams.request_path + "/load", [&](const Request &req, Response &res){
+-        std::lock_guard<std::mutex> lock(whisper_mutex);
+-        state.store(SERVER_STATE_LOADING_MODEL);
+-        if (!req.has_file("model"))
+-        {
+-            fprintf(stderr, "error: no 'model' field in the request\n");
+-            const std::string error_resp = "{\"error\":\"no 'model' field in the request\"}";
+-            res.status = 400;
+-            res.set_content(error_resp, "application/json");
+-            return;
+-        }
+-        std::string model = req.get_file_value("model").content;
+-        if (!is_file_exist(model.c_str()))
+-        {
+-            fprintf(stderr, "error: 'model': %s not found!\n", model.c_str());
+-            const std::string error_resp = "{\"error\":\"model not found!\"}";
+-            res.status = 400;
+-            res.set_content(error_resp, "application/json");
+-            return;
+-        }
+-
+-        // clean up
+-        whisper_free(ctx);
+-
+-        // whisper init
+-        ctx = whisper_init_from_file_with_params(model.c_str(), cparams);
+-
+-        // TODO perhaps load prior model here instead of exit
+-        if (ctx == nullptr) {
+-            fprintf(stderr, "error: model init  failed, no model loaded must exit\n");
+-            exit(1);
+-        }
+-
+-        // initialize openvino encoder. this has no effect on whisper.cpp builds that don't have OpenVINO configured
+-        whisper_ctx_init_openvino_encoder(ctx, nullptr, params.openvino_encode_device.c_str(), nullptr);
+-
+-        state.store(SERVER_STATE_READY);
+-        const std::string success = "Load was successful!";
+-        res.set_content(success, "application/text");
+-
+-        // check if the model is in the file system
+-    });
+-
+     svr->Get(sparams.request_path + "/health", [&](const Request &, Response &res){
+         server_state current_state = state.load();
+         if (current_state == SERVER_STATE_READY) {
+@@ -1243,9 +1250,8 @@
+     svr->set_error_handler([](const Request &req, Response &res) {
+         if (res.status == 400) {
+             res.set_content("Invalid request", "text/plain");
+-        } else if (res.status != 500) {
+-            res.set_content("File Not Found (" + req.path + ")", "text/plain");
+-            res.status = 404;
++        } else if (res.status == 404) {
++            res.set_content("File Not Found", "text/plain");
+         }
+     });
+ 
+@@ -1260,11 +1266,9 @@
+         return 1;
+     }
+ 
+-    // Set the base directory for serving static files
+-    svr->set_base_dir(sparams.public_path);
+-
+-    // to make it ctrl+clickable:
+-    printf("\nwhisper server listening at http://%s:%d\n\n", sparams.hostname.c_str(), sparams.port);
++    // The parent sees this on the private stdout pipe after bind succeeds.
++    printf("RAYME_WHISPER_SESSION_BOUND\n");
++    fflush(stdout);
+ 
+     shutdown_handler = [&](int signal) {
+         printf("\nCaught signal %d, shutting down gracefully...\n", signal);

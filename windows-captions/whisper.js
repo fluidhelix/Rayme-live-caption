@@ -2,6 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const net = require('node:net');
+const { randomBytes } = require('node:crypto');
 const { spawn } = require('node:child_process');
 const { wav } = require('./audio');
 const { RuntimeDeviceParser } = require('./runtime-device');
@@ -16,21 +17,21 @@ function resolveRuntime(env = process.env, root = process.cwd()) {
   return { exe, model };
 }
 async function request(url, options = {}) {
-  const response = await fetch(url, { ...options, signal: AbortSignal.any([AbortSignal.timeout(options.timeout || 60000), ...(options.signal ? [options.signal] : [])]) });
+  const response = await fetch(url, { ...options, redirect: 'error', signal: AbortSignal.any([AbortSignal.timeout(options.timeout || 60000), ...(options.signal ? [options.signal] : [])]) });
   if (!response.ok) { await response.body?.cancel(); throw new Error(`Whisper HTTP ${response.status}`); }
   // Bound responses; server error pages must never become captions.
   const reader = response.body.getReader(); const decoder = new TextDecoder(); let text = '';
   while (true) { const {done,value} = await reader.read(); if (done) break; text += decoder.decode(value, { stream: true }); if (text.length > 65536) { await reader.cancel(); throw new Error('Oversized Whisper response'); } }
   return JSON.parse(text + decoder.decode());
 }
-async function waitReady(url, alive, { timeout = 120000, interval = 300, signal } = {}) {
+async function waitReady(url, alive, { timeout = 120000, interval = 300, signal, bound = () => true } = {}) {
   const end = Date.now() + timeout;
   while (Date.now() < end) {
     if (!alive() || signal?.aborted) throw new Error('Whisper exited before becoming ready');
-    try { const data = await request(`${url}/health`, { timeout: 1000, signal }); if (data.status === 'ok') return; } catch {}
+    if (bound()) try { const data = await request(`${url}/health`, { timeout: 1000, signal }); if (data.status === 'ok' && alive() && !signal?.aborted) return; } catch {}
     await new Promise(r => setTimeout(r, interval));
   }
-  throw new Error('Whisper readiness timed out. This mode requires a whisper-server build with /health support.');
+  throw new Error('Whisper readiness timed out. Use Rayme’s session-authenticated Whisper runtime.');
 }
 async function stopChild(child) {
   if (!child || child.exitCode !== null || child.signalCode) return;
@@ -40,13 +41,15 @@ async function stopChild(child) {
   });
 }
 class Whisper {
+  #credential = randomBytes(32).toString('hex');
   constructor(runtime, env = process.env, { testOnlyStartupDiagnostics, onRuntimeDevice } = {}) { this.runtime = runtime; this.env = env; this.testOnlyStartupDiagnostics = testOnlyStartupDiagnostics; this.onRuntimeDevice=onRuntimeDevice; this.port = Number(env.WHISPER_PORT || 8178); this.url = `http://127.0.0.1:${this.port}`; this.abort = new AbortController(); }
   async start(status) {
     // Refuse another process on the port; never mistake an unrelated server for our child.
     await new Promise((resolve, reject) => { const s = net.createServer(); s.once('error', () => reject(new Error(`Port ${this.port} is busy. Close the other caption mode first.`))); s.listen(this.port, '127.0.0.1', () => s.close(resolve)); });
+    this.abort.signal.throwIfAborted();
     const { exe, model } = this.runtime; const dir = path.dirname(exe);
     // whisper-server rejects the CLI-only -nc flag and already defaults no_context to true.
-    const args = ['-m', model, '--host', '127.0.0.1', '--port', String(this.port), '-t', this.env.WHISPER_THREADS || '4', '-l', this.env.WHISPER_LANGUAGE || 'en', '-bs', '5', '-bo', '5'];
+    const args = ['--rayme-session-auth', '-m', model, '--host', '127.0.0.1', '--port', String(this.port), '-t', this.env.WHISPER_THREADS || '4', '-l', this.env.WHISPER_LANGUAGE || 'en', '-bs', '5', '-bo', '5'];
     if (this.env.WHISPER_GPU === 'false') args.push('-ng');
     if (this.env.FLASH_ATTN === 'true') args.push('-fa');
     // Explicit test hook only: retain at most 8 KiB per stream until readiness.
@@ -55,15 +58,25 @@ class Whisper {
     let capturing = diagnose, stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), spawnError;
     const device=this.onRuntimeDevice?new RuntimeDeviceParser():null;let observing=!!device;
     const append = (previous, chunk) => Buffer.concat([previous, chunk.subarray(0, 8192)]).subarray(0, 8192);
-    this.child = spawn(exe, args, { cwd: dir, windowsHide: true, env: { ...process.env, ...this.env, PATH: dir + path.delimiter + process.env.PATH }, stdio: ['ignore', diagnose ? 'pipe' : 'ignore', 'pipe'] });
+    const credential = this.#credential = randomBytes(32).toString('hex');
+    let bound = false, line = '';
+    this.child = spawn(exe, args, { cwd: dir, windowsHide: true, env: { ...process.env, ...this.env, PATH: dir + path.delimiter + process.env.PATH }, stdio: ['pipe', 'pipe', 'pipe'] });
     const closed = new Promise(resolve => this.child.once('close', resolve));
     this.failed = false;
     this.child.on('error', error => { spawnError = error.code; this.failed = true; status('Could not start Whisper. Check executable and runtime DLLs.'); });
     this.child.on('exit', () => { this.failed = true; status('Whisper stopped. Restart captions after checking the local installation.'); });
-    this.child.stdout?.on('data', chunk => { if (capturing) stdout = append(stdout, chunk); });
+    this.child.stdout.on('data', chunk => {
+      if (capturing) stdout = append(stdout, chunk);
+      if (bound) return;
+      const lines = (line + chunk.toString('utf8')).split('\n');
+      line = lines.pop().slice(-256);
+      bound = lines.some(value => value.trimEnd() === 'RAYME_WHISPER_SESSION_BOUND');
+    });
     this.child.stderr.on('data', chunk => { if (capturing) stderr = append(stderr, chunk);if(observing)device.feed(chunk); });
+    this.child.stdin.on('error', () => {}); // A failed or incompatible executable can exit before reading.
+    this.child.stdin.end(credential + '\n');
     try {
-      await waitReady(this.url, () => !this.failed && this.child.exitCode === null, { signal: this.abort.signal });
+      await waitReady(this.url, () => !this.failed && this.child.exitCode === null, { signal: this.abort.signal, bound: () => bound });
       if(device)this.onRuntimeDevice(device.finish());
     } catch (error) {
       // 'close' follows exit and the final pipe data, including Windows loader errors.
@@ -71,19 +84,21 @@ class Whisper {
       if (diagnose) this.testOnlyStartupDiagnostics({ exe, cwd: dir, args: args.map((arg, i) =>
         i > 0 && ['-t', '-l'].includes(args[i - 1]) && !/^[a-zA-Z0-9.-]{1,32}$/.test(arg) ? '[redacted]' : arg),
         exitCode: this.child.exitCode, signal: this.child.signalCode, spawnError,
-        stdout: stdout.toString('utf8'), stderr: stderr.toString('utf8'), limitBytesPerStream: 8192 });
+        stdout: stdout.toString('utf8').replaceAll(credential, '[redacted]'), stderr: stderr.toString('utf8').replaceAll(credential, '[redacted]'), limitBytesPerStream: 8192 });
       throw error;
     } finally { capturing = false;observing=false; stdout = stderr = Buffer.alloc(0); }
   }
   async infer(pcm, signal) {
+    this.abort.signal.throwIfAborted();
     const body = new FormData(); body.set('file', new Blob([wav(pcm)], { type: 'audio/wav' }), 'audio.wav');
     body.set('no_context', 'true'); body.set('response_format', 'json'); body.set('temperature', '0.0'); body.set('language', this.env.WHISPER_LANGUAGE || 'en');
-    const data = await request(`${this.url}/inference`, { method: 'POST', body, signal });
+    const requestSignal = signal ? AbortSignal.any([signal, this.abort.signal]) : this.abort.signal;
+    const data = await request(`${this.url}/inference`, { method: 'POST', headers: { Authorization: 'Bearer ' + this.#credential }, body, signal: requestSignal });
     if (typeof data.text !== 'string') throw new Error('Missing transcription text');
     // Keep [laughter], *coughing*, etc. Only explicit no-audio markers are discarded.
     const text = data.text.replace(/\s+/g, ' ').trim().slice(0, 4000);
     return /^(?:\[|\()?\s*(?:blank_audio|silence|no audio)\s*(?:\]|\))?[.!]?$/i.test(text) ? '' : text;
   }
-  async close() { this.abort.abort(); await stopChild(this.child); }
+  async close() { this.abort.abort(); this.#credential = null; await stopChild(this.child); }
 }
 module.exports = { resolveRuntime, request, waitReady, stopChild, Whisper };

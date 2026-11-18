@@ -17,6 +17,8 @@ Fetch-Verified $pins.whisper.url "$work/whisper.tar.gz" $pins.whisper.sha256
 & tar -xzf "$work/whisper.tar.gz" -C $work
 if ($LASTEXITCODE -ne 0) { throw 'Whisper extraction failed' }
 $source = "$work/whisper.cpp-$($pins.whisper.commit)"
+& git -C $source apply --whitespace=error "$PSScriptRoot/whisper-session-auth.patch"
+if ($LASTEXITCODE -ne 0) { throw 'Whisper session authentication patch failed' }
 $configure = @('-S', $source, '-B', "$work/cpu", '-G', 'Visual Studio 17 2022', '-A', 'x64', '-T', "version=$env:VCToolsVersion", "-DCMAKE_SYSTEM_VERSION=$($identity.inputs.toolchain.windowsSdk)", '-DCMAKE_BUILD_TYPE=Release', '-DCMAKE_POLICY_VERSION_MINIMUM=3.10', '-DCMAKE_POLICY_DEFAULT_CMP0091=NEW', '-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded', '-DGGML_NATIVE=OFF', '-DGGML_CUDA=OFF', '-DGGML_OPENMP=OFF', '-DGGML_AVX=OFF', '-DGGML_AVX2=OFF', '-DGGML_FMA=OFF', '-DGGML_F16C=OFF', '-DWHISPER_BUILD_TESTS=OFF', '-DWHISPER_CURL=OFF')
 $pathmap = '/pathmap:"' + $source.Replace('\','/') + '"=/_/whisper'
 # The pinned server uses narrow main(argv), while its model loader explicitly

@@ -14,6 +14,14 @@ Fetch-Verified $assets.modelUrl "$root/ggml-tiny.en.bin" SHA1 $assets.modelSha1
 Fetch-Verified $assets.sourceUrl "$root/whisper-source.tar.gz" SHA256 $assets.sourceSha256
 $source = "$root/whisper.cpp-$($assets.whisperCommit)"
 if (!(Test-Path $source)) { tar -xzf "$root/whisper-source.tar.gz" -C $root; if ($LASTEXITCODE -ne 0) { throw 'Source extraction failed' } }
+$patch = "$repo/distribution/whisper-session-auth.patch"
+& git -C $source apply --check --whitespace=error $patch 2>$null
+if ($LASTEXITCODE -eq 0) {
+    & git -C $source apply --whitespace=error $patch
+} else {
+    & git -C $source apply --reverse --check --whitespace=error $patch
+}
+if ($LASTEXITCODE -ne 0) { throw 'Speech integration source does not match the pinned authentication patch' }
 # String literals avoid PowerShell parsing a dotted -D value as separate tokens.
 $configureArguments = @(
     '-S', $source

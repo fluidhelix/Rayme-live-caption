@@ -1,2 +1,4 @@
 # Preserve upstream license bytes and formatting, including original CRLF/spaces.
 distribution/legal/*.txt -text -whitespace
+# Preserve the patch bytes that are hashed into the native build identity.
+distribution/whisper-session-auth.patch -text -whitespace
