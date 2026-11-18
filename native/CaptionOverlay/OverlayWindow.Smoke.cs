@@ -125,6 +125,7 @@ internal sealed partial class OverlayWindow {
             state.Apply("""{"type":"source-removed","source":{"id":"b","generation":2,"name":"Voice chat","identity":"test-b"}}""");
             state.Apply("""{"type":"reset","source":{"id":"device","generation":3,"name":"Windows playback","identity":"default"}}""");Render();
             UiCheck(captions.Children.Count==1&&ReferenceEquals(captions.Children[0],panels["device"]),"Whole-device mode uses a single full-height transcript panel");
+            await DormantPairingWindowSmoke();
             SmokePassed=true;
         } catch(Exception error) { SmokePassed=false;failure=error.ToString(); }
         finally {

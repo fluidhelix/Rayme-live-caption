@@ -2,8 +2,74 @@ using System.Text.Json;
 using Rayme.Overlay;
 internal static class AccessibilityTests {
     static Source Source(string slot)=>new(slot,1,"App "+slot,slot+":100");
-    static string Event(string type,string slot,long id=1,bool final=false,string text="words")=>JsonSerializer.Serialize(new{type,source=new{id=slot,generation=1,name="App "+slot,identity=slot+":100"},id,revision=id,final,text,capturedAt=id});
+    static string Event(string type,string slot,long id=1,bool final=false,string text="words",long generation=1)=>JsonSerializer.Serialize(new{type,source=new{id=slot,generation,name="App "+slot,identity=slot+":"+(99+generation)},id,revision=id,final,text,capturedAt=id});
+    static void DormantPairingRegression(Action<bool,string> check){
+        var state=new CaptionState();
+        var layout=new CaptionLayout();
+        foreach(string slot in new[]{"a","c","d"}){state.Apply(Event("reset",slot));layout.Synchronize(state);}
+        check(layout.Attach("c","d"),"C and D can pair while A/B is dormant");
+        check(layout.Attach("a","c"),"A can exchange into C's upper position");
+        var transitionPrefs=new Preferences{Pairings=layout.Pairings,PairOrders=layout.Orders};
+        state.Apply(Event("reset","b"));layout.Synchronize(state);
+        var groups=layout.Groups.Select(g=>g.Key).ToArray();
+        check(groups.SequenceEqual(new[]{"a+d","b","c"}),"Enabling B after the exchange keeps each slot in exactly one group. Actual: "+string.Join(" | ",groups));
+        check(layout.Pairings.Select(ApplicationSlots.Key).SequenceEqual(new[]{"a+d"})&&layout.Orders.ContainsKey("a+b")&&layout.Orders.ContainsKey("c+d"),"Exchange removes the dormant membership but keeps prior pair ordering for later use");
+        var saved=Preferences.Parse(JsonSerializer.Serialize(transitionPrefs));
+        var restored=new CaptionLayout(saved.Pairings,saved.PairOrders);
+        restored.Synchronize(state);
+        check(restored.Groups.Select(g=>g.Key).SequenceEqual(groups),"Saving before B returns and restarting with B active preserves the exchange");
+        foreach(string slot in new[]{"c","d","b"}){state.Apply(Event("source-removed",slot));restored.Synchronize(state);}
+        check(restored.Profile(restored.Groups.Single())=="a+d","Removing sources preserves A's new dormant A/D placement profile");
+        state.Apply(Event("reset","b",generation:2));state.Apply(Event("reset","d",generation:2));restored.Synchronize(state);
+        check(restored.Groups.Select(g=>g.Key).SequenceEqual(new[]{"a+d","b"}),"Re-enabling both former and current partners restores only the current pair");
+    }
+    static void FiveSlotPairingTransitions(Action<bool,string> check){
+        var state=new CaptionState();
+        var layout=new CaptionLayout([["b","a"],["d","c"]]);
+        void Apply(string type,string slot,long generation=1){state.Apply(Event(type,slot,generation:generation));layout.Synchronize(state);}
+        void Expect(params string[] keys){
+            var members=layout.Groups.SelectMany(g=>g.Slots).Order();
+            var savedMembers=layout.Pairings.SelectMany(p=>p).ToArray();
+            check(layout.Groups.Select(g=>g.Key).SequenceEqual(keys)&&members.SequenceEqual(state.Sources.Keys.Order())
+                &&savedMembers.Distinct().Count()==savedMembers.Length,"Active groups and saved pairs are disjoint: "+string.Join(" | ",keys));
+        }
+        foreach(string slot in new[]{"a","c","e"})Apply("reset",slot);
+        Expect("a","c","e");
+        check(layout.Attach("c","a"),"Attaching two singletons releases both former dormant pairs");
+        Apply("reset","b");Apply("reset","d");
+        Expect("a+c","b","d","e");
+        check(layout.Attach("e","d")&&layout.Attach("b","c"),"Five slots support independent pairs and an exchange into the lower row");
+        Expect("a+b","d+e","c");
+        Apply("source-removed","a");
+        Expect("d+e","b","c");
+        check(layout.Attach("b","d"),"A singleton with a dormant partner can exchange into another pair");
+        Apply("reset","a",2);
+        Expect("b+e","a","c","d");
+        check(layout.Separate("b+e")&&layout.Attach("c","d"),"Detaching and reattaching after the exchange reuses the former D-first order");
+        Expect("d+c","a","b","e");
+        Apply("source-removed","d");
+        Expect("a","b","c","e");
+        var saved=new Preferences{Pairings=layout.Pairings,PairOrders=layout.Orders};
+        var loaded=Preferences.Parse(JsonSerializer.Serialize(saved));
+        layout=new CaptionLayout(loaded.Pairings,loaded.PairOrders);
+        layout.Synchronize(state);
+        Apply("reset","d",2);
+        Expect("d+c","a","b","e");
+
+        layout=new CaptionLayout([["b","a"],["d","c"]]);
+        layout.Synchronize(state);
+        foreach(string slot in new[]{"b","c","d","e"})Apply("source-removed",slot,state.Sources[slot].Source.Generation);
+        Expect("a");
+        check(layout.Profile(layout.Groups.Single())=="b+a","Leaving only A active preserves its intentional B-first placement profile");
+        Apply("reset","b",2);
+        Expect("b+a");
+        Apply("source-removed","b",2);Apply("source-removed","a",2);
+        Apply("reset","a",3);Apply("reset","b",3);
+        Expect("b+a");
+    }
     public static void Run(Action<bool,string> check){
+        DormantPairingRegression(check);
+        FiveSlotPairingTransitions(check);
         check(ParagraphContinuation.Indent(2,0,112,400)==110,"Native continuation uses actual glyph origin, not estimated line counts");
         check(ParagraphContinuation.Indent(112,110,242,400)==240,"Repeated pruning replaces rather than accumulates continuation indentation");
         check(ParagraphContinuation.Indent(0,0,1000,300)==300&&ParagraphContinuation.Indent(double.NaN,0,30,300)==0,"Continuation is finite, bounded to one line and safe before layout");

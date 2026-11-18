@@ -121,6 +121,40 @@ internal sealed partial class OverlayWindow {
         foreach(string slot in new[]{"c","d","e"})state.Apply(JsonSerializer.Serialize(new{type="source-removed",source=new{id=slot,generation=1,name="App "+slot,identity="test-"+slot}}));
         Reattach();Render();await AwaitPanels(panels.Values.ToArray());UiCheck(detached.Count==0&&captions.Children.Count==2,"Removing extra applications restores the familiar single A/B caption window");
     }
+    async Task DormantPairingWindowSmoke(){
+        controls?.Close();
+        state.Apply("""{"type":"source-removed","source":{"id":"device","generation":3,"name":"Windows playback","identity":"default"}}""");
+        void Apply(string type,string slot){
+            state.Apply(JsonSerializer.Serialize(new{type,source=new{id=slot,generation=10,name="Dormant App "+slot,identity="dormant-"+slot},id=1,revision=1,final=true,text="After the exchange: caption "+slot,capturedAt=1}));
+        }
+        void ChoosePair(CaptionToolbar bar,string target){
+            Click(bar.Layout);
+            var menu=bar.Layout.ContextMenu;
+            UiCheck(menu?.IsOpen==true,"Standalone pairing opens a real choice menu with multiple active targets");
+            var item=menu!.Items.OfType<MenuItem>().Single(i=>System.Windows.Automation.AutomationProperties.GetName(i)=="Attach to Dormant App "+target);
+            menu.IsOpen=false;
+            item.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        }
+        foreach(string slot in new[]{"a","c","d"})Apply("reset",slot);
+        Render();
+        UiCheck(rootGroup=="a"&&rootProfile=="a+b","Dormant exchange fixture starts with the default A/B profile and B disabled");
+        ChoosePair(detached["c"].Toolbar,"d");
+        UiCheck(rootGroup=="c+d","The contextual menu pairs C above D while A is standalone");
+        var originalA=panels["a"];
+        ChoosePair(detached["a"].Toolbar,"c");
+        Apply("reset","b");Render();
+        var slots=new[]{"a","b","c","d"};
+        await AwaitPanels(slots.Select(s=>panels[s]).ToArray());
+        UiCheck(rootGroup=="a+d"&&IsVisible&&captions.Children.Count==2&&captions.Children[0]==originalA&&captions.Children[1]==panels["d"]
+            &&detached.Keys.Order().SequenceEqual(new[]{"b","c"})&&detached.Values.All(w=>w.IsVisible&&w.Body.Children.Count==1&&w.Body.Children[0]==panels[w.Slot]),
+            "Enabling B after A replaces C leaves one visible A/D pair and independent B and C windows");
+        foreach(string slot in slots)Apply("caption",slot);
+        Render();await AwaitPanels(slots.Select(s=>panels[s]).ToArray());
+        UiCheck(slots.All(s=>panels[s].IsVisible&&panels[s].ActualHeight>0&&panels[s].FinalText=="After the exchange: caption "+s),"Every active native panel displays a new correctly attributed caption after the exchange");
+        Click(detached["b"].Toolbar.Settings);
+        UiCheck(controls?.IsVisible==true&&controls.Owner==detached["b"],"The re-enabled B window can still open its Controls after displaying a caption");
+        controls!.Close();
+    }
     async Task PruningGeometrySmoke(string output){
         foreach(double width in new[]{360d,540d,720d})foreach(double size in new[]{18d,30d}){
             var sample=new CaptionState();long revision=0;

@@ -30,11 +30,11 @@ public sealed class CaptionLayout {
     public static bool CanDetach(CaptionState state)=>TranscriptPresentation.Slots(state).Count(ApplicationSlots.Valid)>=2;
     public void Synchronize(CaptionState state){
         var next=TranscriptPresentation.Slots(state);
-        // Match the established two-source removal/re-enable behavior, without
-        // discarding other pair choices or any saved window arrangements.
-        if(active.Contains("a")&&active.Contains("b")&&next.Count(ApplicationSlots.Valid)<2&&!next.Contains("device")){
-            pairs.RemoveAll(p=>p.Contains("a")||p.Contains("b"));
-            if(!pairs.Any(p=>p.Contains("a")||p.Contains("b")))pairs.Insert(0,["a","b"]);
+        // Restore the legacy default after an unpaired A/B session shrinks.
+        // Keep existing choices, including reversed and dormant pairs.
+        if(active.Contains("a")&&active.Contains("b")&&next.Count(ApplicationSlots.Valid)<2&&!next.Contains("device")
+            &&!pairs.Any(p=>p.Contains("a")||p.Contains("b"))){
+            pairs.Insert(0,["a","b"]);
         }
         active=next;
     }
@@ -45,7 +45,16 @@ public sealed class CaptionLayout {
     public bool Attach(string standalone,string target){
         var from=GroupFor(standalone);var to=GroupFor(target);
         if(from is not{Slots.Length:1}||to==null||from.Key==to.Key||!ApplicationSlots.Valid(standalone)||!ApplicationSlots.Valid(target))return false;
-        if(to.Slots.Length==2){int index=pairs.FindIndex(p=>ApplicationSlots.Key(p)==to.Key);var replacement=to.Slots.ToArray();replacement[Array.IndexOf(replacement,target)]=standalone;pairs[index]=replacement;orders[Unordered(replacement)]=replacement.ToArray();}
+        if(to.Slots.Length==2){
+            // A visible singleton can still belong to a dormant pair. Release
+            // that membership before replacing a row in the active pair.
+            pairs.RemoveAll(p=>p.Contains(standalone));
+            int index=pairs.FindIndex(p=>ApplicationSlots.Key(p)==to.Key);
+            var replacement=to.Slots.ToArray();
+            replacement[Array.IndexOf(replacement,target)]=standalone;
+            pairs[index]=replacement;
+            orders[Unordered(replacement)]=replacement.ToArray();
+        }
         else{pairs.RemoveAll(p=>p.Contains(standalone)||p.Contains(target));var key=Unordered(new[]{target,standalone});var ordered=orders.GetValueOrDefault(key)??new[]{target,standalone}.Order().ToArray();pairs.Add(ordered.ToArray());orders[key]=ordered.ToArray();}
         return true;
     }
